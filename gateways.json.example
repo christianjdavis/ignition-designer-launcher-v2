@@ -1,0 +1,66 @@
+[
+  {
+    "id": "1",
+    "name": "Production Gateway",
+    "url": "http://gateway.example.com:80",
+    "project": "",
+    "status": "online",
+    "environment": "production",
+    "tags": [
+      "frontend",
+      "building-1"
+    ],
+    "isFavorite": true,
+    "lastAccessed": "2025-01-15T10:30:00.000Z",
+    "group": "Building 1",
+    "order": 1
+  },
+  {
+    "id": "2",
+    "name": "Staging Gateway",
+    "url": "http://staging.example.com:80",
+    "project": "MyProject",
+    "status": "online",
+    "environment": "staging",
+    "tags": [
+      "testing",
+      "staging"
+    ],
+    "isFavorite": false,
+    "lastAccessed": "2025-01-14T14:20:00.000Z",
+    "group": "Staging",
+    "order": 2
+  },
+  {
+    "id": "3",
+    "name": "Local Gateway",
+    "url": "http://localhost:8088",
+    "project": "",
+    "status": "online",
+    "environment": "local",
+    "tags": [
+      "local",
+      "development"
+    ],
+    "isFavorite": true,
+    "lastAccessed": "2025-01-16T09:15:00.000Z",
+    "group": "Development",
+    "order": 3
+  },
+  {
+    "id": "4",
+    "name": "Development Gateway",
+    "url": "http://dev.example.com:80",
+    "project": "",
+    "status": "online",
+    "environment": "development",
+    "tags": [
+      "cicd",
+      "testing"
+    ],
+    "isFavorite": false,
+    "lastAccessed": "2025-01-10T16:45:00.000Z",
+    "group": "Development",
+    "order": 4
+  }
+]
