@@ -1,8 +1,8 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useEffect } from "react"
+import React, { useState, useEffect } from "react"
+import { useTheme } from "next-themes"
+import * as storage from "@/lib/storage"
 import {
   Search,
   Grid3x3,
@@ -22,6 +22,11 @@ import {
   Edit3,
   Check,
   ExternalLink,
+  Sun,
+  Moon,
+  Monitor,
+  Download,
+  Play,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -204,8 +209,15 @@ const mockDesigners: Designer[] = [
 ]
 
 export default function IgnitionLauncher() {
+  const { theme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
   const [designers, setDesigners] = useState<Designer[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Prevent hydration mismatch
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   // Check if a gateway is online using backend API
   const checkGatewayStatus = async (url: string): Promise<boolean> => {
@@ -255,8 +267,7 @@ export default function IgnitionLauncher() {
   // Load gateways and custom tags from JSON files
   useEffect(() => {
     // Load gateways
-    fetch('/api/gateways')
-      .then((res) => res.json())
+    storage.getGateways()
       .then(async (data) => {
         const loadedDesigners = data.map((d: any) => ({
           ...d,
@@ -289,8 +300,7 @@ export default function IgnitionLauncher() {
       })
 
     // Load custom tags
-    fetch('/api/tags')
-      .then((res) => res.json())
+    storage.getTags()
       .then((tags) => {
         setCustomTags(tags)
       })
@@ -315,7 +325,12 @@ export default function IgnitionLauncher() {
   const [editMode, setEditMode] = useState(false)
   const [draggedFolder, setDraggedFolder] = useState<string | null>(null)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>("grid")
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('designer-launcher-viewMode') as ViewMode) || "grid"
+    }
+    return "grid"
+  })
   const [filterTab, setFilterTab] = useState<FilterTab>("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -325,6 +340,17 @@ export default function IgnitionLauncher() {
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editTagsMode, setEditTagsMode] = useState(false)
+  const [openFolders, setOpenFolders] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('designer-launcher-openFolders')
+        return saved ? JSON.parse(saved) : []
+      } catch {
+        return []
+      }
+    }
+    return []
+  })
 
   // Generate Ignition designer deep link
   const generateDesignerLink = (designer: Designer): string => {
@@ -355,16 +381,12 @@ export default function IgnitionLauncher() {
 
     // Save to file with ISO timestamp
     try {
-      await fetch('/api/gateways', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          updatedDesigners.map((d) => ({
-            ...d,
-            lastAccessed: d.lastAccessed.toISOString(),
-          }))
-        ),
-      })
+      await storage.saveGateways(
+        updatedDesigners.map((d) => ({
+          ...d,
+          lastAccessed: d.lastAccessed.toISOString(),
+        }))
+      )
     } catch (error) {
       console.error('Failed to save lastAccessed:', error)
     }
@@ -376,7 +398,8 @@ export default function IgnitionLauncher() {
   }
 
   const allTags = Array.from(new Set([...designers.flatMap((d) => d.tags), ...customTags]))
-  const allEnvironments = Array.from(new Set(designers.map((d) => d.environment)))
+  const environmentOrder: Designer['environment'][] = ['production', 'staging', 'development', 'local']
+  const allEnvironments = environmentOrder.filter(env => designers.some(d => d.environment === env))
 
   const addCustomTag = async (tag: string) => {
     const trimmedTag = tag.trim()
@@ -386,11 +409,7 @@ export default function IgnitionLauncher() {
 
       // Save to file
       try {
-        await fetch('/api/tags', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updatedTags),
-        })
+        await storage.saveTags(updatedTags)
       } catch (error) {
         console.error('Failed to save custom tags:', error)
       }
@@ -404,11 +423,7 @@ export default function IgnitionLauncher() {
 
     // Save custom tags to file
     try {
-      await fetch('/api/tags', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedCustomTags),
-      })
+      await storage.saveTags(updatedCustomTags)
     } catch (error) {
       console.error('Failed to save custom tags:', error)
     }
@@ -422,16 +437,12 @@ export default function IgnitionLauncher() {
 
     // Save designers to file
     try {
-      await fetch('/api/gateways', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          updatedDesigners.map((d) => ({
-            ...d,
-            lastAccessed: d.lastAccessed.toISOString(),
-          }))
-        ),
-      })
+      await storage.saveGateways(
+        updatedDesigners.map((d) => ({
+          ...d,
+          lastAccessed: d.lastAccessed.toISOString(),
+        }))
+      )
     } catch (error) {
       console.error('Failed to save gateways:', error)
     }
@@ -439,6 +450,7 @@ export default function IgnitionLauncher() {
     // Remove from selected tags
     setSelectedTags((prev) => prev.filter((t) => t !== tagToDelete))
   }
+
 
   console.log('Current filterTab:', filterTab)
   console.log('Designers count:', designers.length)
@@ -504,6 +516,28 @@ export default function IgnitionLauncher() {
     .filter((folder) => groupedDesigners[folder])
     .concat(Object.keys(groupedDesigners).filter((folder) => !folderOrder.includes(folder)))
 
+  // Initialize open folders on mount
+  React.useEffect(() => {
+    if (groupBy !== "none" && filterTab !== "recent") {
+      // Only initialize if openFolders is empty
+      setOpenFolders(prev => prev.length === 0 ? orderedGroups : prev)
+    }
+  }, [groupBy, filterTab])
+
+  // Persist viewMode to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('designer-launcher-viewMode', viewMode)
+    }
+  }, [viewMode])
+
+  // Persist openFolders to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('designer-launcher-openFolders', JSON.stringify(openFolders))
+    }
+  }, [openFolders])
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
   }
@@ -530,28 +564,20 @@ export default function IgnitionLauncher() {
       setDesigners(updatedDesigners)
 
       // Save to file
-      await fetch('/api/gateways', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedDesigners.map(d => ({
-          ...d,
-          lastAccessed: d.lastAccessed.toISOString()
-        }))),
-      })
+      await storage.saveGateways(updatedDesigners.map(d => ({
+        ...d,
+        lastAccessed: d.lastAccessed.toISOString()
+      })))
     } else {
       // Update existing designer
       const updatedDesigners = designers.map((d) => (d.id === editingDesigner.id ? editingDesigner : d))
       setDesigners(updatedDesigners)
 
       // Save to file
-      await fetch('/api/gateways', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedDesigners.map(d => ({
-          ...d,
-          lastAccessed: d.lastAccessed.toISOString()
-        }))),
-      })
+      await storage.saveGateways(updatedDesigners.map(d => ({
+        ...d,
+        lastAccessed: d.lastAccessed.toISOString()
+      })))
     }
 
     setEditDialogOpen(false)
@@ -724,20 +750,53 @@ export default function IgnitionLauncher() {
   }
 
   return (
-    <div className="min-h-screen bg-[#e8e8e8] text-foreground">
-      <header className="bg-[#222] shadow-md">
+    <div className="min-h-screen bg-background text-foreground">
+      <header className="bg-slate-700 dark:bg-black shadow-md border-b border-transparent dark:border-neutral-800">
         <div className="flex items-center justify-between px-6 py-2">
           <div className="flex items-center gap-3">
-            <img src="/launcher.png" alt="Ignition" className="h-10 w-10" />
+            <img src="./launcher.png" alt="Ignition" className="h-10 w-10" />
             <div>
               <h1 className="text-base font-normal text-white">Ignition Designer Launcher</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {mounted && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-gray-300 hover:bg-gray-600 dark:hover:bg-gray-800 hover:text-white"
+                  >
+                    {theme === 'light' ? (
+                      <Sun className="h-5 w-5" />
+                    ) : theme === 'dark' ? (
+                      <Moon className="h-5 w-5" />
+                    ) : (
+                      <Monitor className="h-5 w-5" />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setTheme('light')}>
+                    <Sun className="mr-2 h-4 w-4" />
+                    Light
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setTheme('dark')}>
+                    <Moon className="mr-2 h-4 w-4" />
+                    Dark
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setTheme('system')}>
+                    <Monitor className="mr-2 h-4 w-4" />
+                    System
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
             <Button
               variant="ghost"
               size="icon"
-              className="text-gray-400 hover:bg-gray-800 hover:text-white"
+              className="text-gray-300 hover:bg-gray-600 dark:hover:bg-gray-800 hover:text-white"
               onClick={() => alert('Ignition Designer Launcher\nVersion 1.0\n\nManage and launch Ignition Designer connections.')}
             >
               <Info className="h-5 w-5" />
@@ -745,7 +804,7 @@ export default function IgnitionLauncher() {
             <Button
               variant="ghost"
               size="icon"
-              className="text-gray-400 hover:bg-gray-800 hover:text-white"
+              className="text-gray-300 hover:bg-gray-600 dark:hover:bg-gray-800 hover:text-white"
               onClick={() => alert('Settings functionality coming soon!')}
             >
               <Settings className="h-5 w-5" />
@@ -755,7 +814,7 @@ export default function IgnitionLauncher() {
       </header>
 
       <div className="flex">
-        <aside className="w-56 bg-[#2d2d2d] p-0 min-h-[calc(100vh-54px)]">
+        <aside className="w-56 bg-gray-200 dark:bg-neutral-900 p-0 min-h-[calc(100vh-54px)] border-r border-transparent dark:border-neutral-800">
           <div className="space-y-0 py-4">
             <div className="space-y-0">
               <button
@@ -763,34 +822,34 @@ export default function IgnitionLauncher() {
                 className={cn(
                   "flex w-full items-center gap-3 px-4 py-3 text-sm font-normal transition-colors border-l-4",
                   filterTab === "all"
-                    ? "bg-[#3d3d3d] text-white border-[#1e90ff]"
-                    : "text-white hover:bg-[#3d3d3d] border-transparent",
+                    ? "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white border-blue-500"
+                    : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800 border-transparent",
                 )}
               >
                 <Grid3x3 className="h-4 w-4" />
                 All Designers
-                <span className="ml-auto text-xs">{mockDesigners.length}</span>
+                <span className="ml-auto text-xs">{designers.length}</span>
               </button>
               <button
                 onClick={() => setFilterTab("favorites")}
                 className={cn(
                   "flex w-full items-center gap-3 px-4 py-3 text-sm font-normal transition-colors border-l-4",
                   filterTab === "favorites"
-                    ? "bg-[#3d3d3d] text-white border-[#1e90ff]"
-                    : "text-white hover:bg-[#3d3d3d] border-transparent",
+                    ? "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white border-blue-500"
+                    : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800 border-transparent",
                 )}
               >
                 <Star className="h-4 w-4" />
                 Favorites
-                <span className="ml-auto text-xs">{mockDesigners.filter((d) => d.isFavorite).length}</span>
+                <span className="ml-auto text-xs">{designers.filter((d) => d.isFavorite).length}</span>
               </button>
               <button
                 onClick={() => setFilterTab("recent")}
                 className={cn(
                   "flex w-full items-center gap-3 px-4 py-3 text-sm font-normal transition-colors border-l-4",
                   filterTab === "recent"
-                    ? "bg-[#3d3d3d] text-white border-[#1e90ff]"
-                    : "text-white hover:bg-[#3d3d3d] border-transparent",
+                    ? "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white border-blue-500"
+                    : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800 border-transparent",
                 )}
               >
                 <Clock className="h-4 w-4" />
@@ -799,12 +858,12 @@ export default function IgnitionLauncher() {
             </div>
 
             <div className="mt-6">
-              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-white">
+              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">
                 Group By
               </h3>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="mx-4 w-[calc(100%-2rem)] justify-between bg-[#3d3d3d] border-gray-600 text-white hover:bg-[#4d4d4d]">
+                  <Button variant="outline" className="mx-4 w-[calc(100%-2rem)] justify-between bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700">
                     <span className="flex items-center gap-2">
                       <Folder className="h-4 w-4" />
                       {groupBy === "none" ? "None" : groupBy === "group" ? "Location" : "Environment"}
@@ -821,7 +880,7 @@ export default function IgnitionLauncher() {
             </div>
 
             <div className="mt-6">
-              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-white">
+              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">
                 Environment
               </h3>
               <div className="space-y-0">
@@ -832,21 +891,21 @@ export default function IgnitionLauncher() {
                     className={cn(
                       "flex w-full items-center gap-2 px-4 py-2 text-sm transition-colors",
                       selectedEnvironments.includes(env)
-                        ? "bg-[#3d3d3d] text-white"
-                        : "text-white hover:bg-[#3d3d3d]",
+                        ? "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white"
+                        : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800",
                     )}
                   >
                     <Circle
-                      className={cn(
-                        "h-2 w-2 fill-current",
-                        env === "production" && "text-green-500",
-                        env === "staging" && "text-yellow-500",
-                        env === "development" && "text-blue-500",
-                        env === "local" && "text-gray-500",
-                      )}
+                      className="h-2 w-2 fill-current"
+                      style={{
+                        color: env === "production" ? "rgb(34 197 94)" :
+                               env === "staging" ? "rgb(234 179 8)" :
+                               env === "development" ? "rgb(59 130 246)" :
+                               env === "local" ? "rgb(249 115 22)" : undefined
+                      }}
                     />
                     <span className="capitalize">{env}</span>
-                    <span className="ml-auto text-xs">{mockDesigners.filter((d) => d.environment === env).length}</span>
+                    <span className="ml-auto text-xs">{designers.filter((d) => d.environment === env).length}</span>
                   </button>
                 ))}
               </div>
@@ -854,15 +913,15 @@ export default function IgnitionLauncher() {
 
             <div className="mt-6">
               <div className="mb-2 flex items-center justify-between px-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-white">Tags</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">Tags</h3>
                 <Button
                   variant={editTagsMode ? "default" : "ghost"}
                   size="sm"
                   className={cn(
                     "h-5 gap-1 px-2 text-xs",
                     editTagsMode
-                      ? "bg-[#1e90ff] hover:bg-[#1c86ee] text-white"
-                      : "text-white hover:bg-[#3d3d3d]",
+                      ? "bg-blue-600 hover:bg-blue-700 text-white"
+                      : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800",
                   )}
                   onClick={() => setEditTagsMode(!editTagsMode)}
                 >
@@ -890,8 +949,8 @@ export default function IgnitionLauncher() {
                           "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
                           editTagsMode && "pr-6",
                           !editTagsMode && selectedTags.includes(tag)
-                            ? "bg-[#1e90ff] text-white"
-                            : "bg-[#3d3d3d] text-white hover:bg-[#4d4d4d]",
+                            ? "bg-blue-600 text-white"
+                            : "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-700",
                           editTagsMode && "cursor-default opacity-70",
                         )}
                       >
@@ -917,13 +976,13 @@ export default function IgnitionLauncher() {
                   <Input
                     id="sidebar-new-tag"
                     placeholder="New tag..."
-                    className="h-7 text-xs bg-[#3d3d3d] border-gray-600 text-white placeholder:text-gray-300"
+                    className="h-7 text-xs bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                   />
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 shrink-0 text-white hover:bg-[#4d4d4d]"
+                    className="h-7 w-7 shrink-0 text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-700"
                     onClick={() => {
                       const input = document.getElementById("sidebar-new-tag") as HTMLInputElement
                       const newTag = input.value.trim()
@@ -941,8 +1000,8 @@ export default function IgnitionLauncher() {
           </div>
         </aside>
 
-        <main className="flex-1">
-          <div className="bg-white px-6 py-4 border-b border-gray-200">
+        <main className="flex-1 min-h-screen bg-background">
+          <div className="bg-white dark:bg-neutral-900 px-6 py-4 border-b border-transparent dark:border-neutral-800">
             <div className="flex items-center justify-between gap-4">
               <div className="flex flex-1 items-center gap-3">
                 <div className="relative flex-1 max-w-md">
@@ -1000,14 +1059,14 @@ export default function IgnitionLauncher() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <div className="flex rounded-lg border border-border bg-background">
+                <div className="flex rounded-lg border border-gray-300 dark:border-neutral-500">
                   <Button
                     variant={viewMode === "grid" ? "default" : "ghost"}
                     size="icon"
                     onClick={() => setViewMode("grid")}
                     className={cn(
-                      "rounded-r-none",
-                      viewMode === "grid" && "bg-[#2c5f8d] hover:bg-[#234a6d]"
+                      "rounded-r-none text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-neutral-700",
+                      viewMode === "grid" && "bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white"
                     )}
                   >
                     <Grid3x3 className="h-4 w-4" />
@@ -1017,38 +1076,177 @@ export default function IgnitionLauncher() {
                     size="icon"
                     onClick={() => setViewMode("list")}
                     className={cn(
-                      "rounded-l-none",
-                      viewMode === "list" && "bg-[#2c5f8d] hover:bg-[#234a6d]"
+                      "rounded-l-none text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-neutral-700",
+                      viewMode === "list" && "bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white"
                     )}
                   >
                     <List className="h-4 w-4" />
                   </Button>
                 </div>
                 {groupBy !== "none" && (
-                  <Button
-                    variant={editMode ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setEditMode(!editMode)}
-                    className={cn(
-                      "gap-2",
-                      editMode && "bg-[#2c5f8d] hover:bg-[#234a6d]"
-                    )}
-                  >
-                    {editMode ? (
-                      <>
-                        <Check className="h-4 w-4" />
-                        Done
-                      </>
-                    ) : (
-                      <>
-                        <Edit3 className="h-4 w-4" />
-                        Edit Folders
-                      </>
-                    )}
-                  </Button>
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (openFolders.length > 0) {
+                          setOpenFolders([])
+                        } else {
+                          setOpenFolders(orderedGroups)
+                        }
+                      }}
+                      className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 text-gray-900 dark:text-white bg-white dark:bg-neutral-800 hover:bg-gray-200 dark:hover:bg-neutral-700"
+                    >
+                      {openFolders.length > 0 ? "Collapse All" : "Expand All"}
+                    </Button>
+                    <Button
+                      variant={editMode ? "default" : "outline"}
+                      onClick={() => setEditMode(!editMode)}
+                      className={cn(
+                        "gap-2 h-9 border border-gray-300 dark:border-neutral-500 text-gray-900 dark:text-white bg-white dark:bg-neutral-800 hover:bg-gray-200 dark:hover:bg-neutral-700",
+                        editMode && "bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white border-slate-600 dark:border-slate-600"
+                      )}
+                    >
+                      {editMode ? (
+                        <>
+                          <Check className="h-4 w-4" />
+                          Done
+                        </>
+                      ) : (
+                        <>
+                          <Edit3 className="h-4 w-4" />
+                          Edit Folders
+                        </>
+                      )}
+                    </Button>
+                  </>
                 )}
                 <Button
-                  className="gap-2 bg-[#2c5f8d] hover:bg-[#234a6d]"
+                  className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white"
+                  onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = '.json'
+                    input.onchange = async (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0]
+                      if (!file) return
+
+                      try {
+                        const text = await file.text()
+                        const data = JSON.parse(text)
+
+                        // Parse Ignition launcher format
+                        const imported: Designer[] = []
+
+                        // Check if this is a single designer export (has gateway.info field)
+                        if (data['gateway.info']) {
+                          // Single designer format
+                          const projectName = data['jvm.arguments']
+                            ?.find((arg: string) => arg.startsWith('-Dproject.name='))
+                            ?.replace('-Dproject.name=', '') || ''
+
+                          const gatewayName = data['gateway.info']['gateway.name'] || ''
+                          const displayName = data.name || gatewayName || 'Imported Gateway'
+
+                          // Extract environment from URL or gateway name
+                          const url = data['gateway.info']['gateway.address'] || ''
+                          let environment: Designer['environment'] = 'production'
+                          const urlLower = url.toLowerCase()
+                          if (urlLower.includes('local') || urlLower.includes('localhost')) {
+                            environment = 'local'
+                          } else if (urlLower.includes('dev')) {
+                            environment = 'development'
+                          } else if (urlLower.includes('staging') || urlLower.includes('stg')) {
+                            environment = 'staging'
+                          }
+
+                          // Create tags from gateway name parts (e.g., "ABI-WING-C-EPMS1" -> ["ABI", "WING-C", "EPMS1"])
+                          const nameParts = gatewayName.split('-').filter((part: string) => part.length > 0)
+                          const tags = ['imported', ...nameParts.slice(0, 2)] // First 2 parts as tags
+
+                          const designer: Designer = {
+                            id: Date.now().toString(),
+                            name: displayName,
+                            url: url,
+                            project: projectName,
+                            status: 'offline',
+                            environment: environment,
+                            tags: tags,
+                            isFavorite: data.favorite || false,
+                            lastAccessed: new Date(),
+                            group: nameParts[0] || undefined, // Will be set in dialog
+                            order: designers.length + 1,
+                          }
+                          imported.push(designer)
+                        } else {
+                          // Try to find gateway configurations in array format
+                          const gateways = data.gateways || data.designers || data.connections || []
+
+                          gateways.forEach((gw: any, index: number) => {
+                            const projectName = gw['jvm.arguments']
+                              ?.find((arg: string) => arg.startsWith('-Dproject.name='))
+                              ?.replace('-Dproject.name=', '') || ''
+
+                            const gatewayName = gw['gateway.info']?.['gateway.name'] || ''
+                            const displayName = gw.name || gatewayName || `Imported Gateway ${index + 1}`
+
+                            // Extract environment from URL
+                            const url = gw['gateway.info']?.['gateway.address'] || gw.url || gw.address || ''
+                            let environment: Designer['environment'] = 'production'
+                            const urlLower = url.toLowerCase()
+                            if (urlLower.includes('local') || urlLower.includes('localhost')) {
+                              environment = 'local'
+                            } else if (urlLower.includes('dev')) {
+                              environment = 'development'
+                            } else if (urlLower.includes('staging') || urlLower.includes('stg')) {
+                              environment = 'staging'
+                            }
+
+                            // Create tags from gateway name parts
+                            const nameParts = gatewayName.split('-').filter((part: string) => part.length > 0)
+                            const tags = ['imported', ...nameParts.slice(0, 2)]
+
+                            const designer: Designer = {
+                              id: Date.now().toString() + index,
+                              name: displayName,
+                              url: url,
+                              project: projectName || gw.project || '',
+                              status: 'offline',
+                              environment: environment,
+                              tags: tags.length > 1 ? tags : ['imported'],
+                              isFavorite: gw.favorite || false,
+                              lastAccessed: new Date(),
+                              group: nameParts[0] || undefined,
+                              order: designers.length + imported.length + 1,
+                            }
+                            imported.push(designer)
+                          })
+                        }
+
+                        if (imported.length > 0) {
+                          // Open edit dialog with the first imported designer
+                          setEditingDesigner(imported[0])
+                          setEditDialogOpen(true)
+
+                          // If there are more, add them after the dialog is saved
+                          if (imported.length > 1) {
+                            alert(`Imported ${imported.length} designer(s). You can review and edit the first one.`)
+                          }
+                        } else {
+                          alert('No designers found in the file. Please check the file format.')
+                        }
+                      } catch (error) {
+                        console.error('Import failed:', error)
+                        alert('Failed to import file. Please ensure it is a valid Ignition launcher JSON file.')
+                      }
+                    }
+                    input.click()
+                  }}
+                >
+                  <Download className="h-4 w-4" />
+                  Import from Ignition
+                </Button>
+                <Button
+                  className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white"
                   onClick={() => {
                     const newDesigner: Designer = {
                       id: Date.now().toString(),
@@ -1056,7 +1254,7 @@ export default function IgnitionLauncher() {
                       url: "http://",
                       project: "",
                       status: "offline",
-                      environment: "production",
+                      environment: "local",
                       tags: [],
                       isFavorite: false,
                       lastAccessed: new Date(),
@@ -1073,9 +1271,9 @@ export default function IgnitionLauncher() {
             </div>
           </div>
 
-          <div className="p-6">
+          <div className="p-6 bg-transparent">
             {groupBy !== "none" && filterTab !== "recent" ? (
-              <Accordion type="multiple" defaultValue={orderedGroups} className="space-y-4">
+              <Accordion type="multiple" value={openFolders} onValueChange={setOpenFolders} className="space-y-4">
                 {orderedGroups.map((groupName) => {
                   const designers = groupedDesigners[groupName]
                   if (!designers) return null
@@ -1088,9 +1286,9 @@ export default function IgnitionLauncher() {
                       onDragStart={() => handleFolderDragStart(groupName)}
                       onDragEnd={handleFolderDragEnd}
                       className={cn(
-                        "rounded border border-[#ddd] bg-white transition-all shadow-sm",
-                        dragOverGroup === groupName && !editMode && "border-[#2c5f8d] bg-blue-50",
-                        dragOverFolder === groupName && editMode && "border-[#2c5f8d] bg-blue-50 scale-105",
+                        "rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 transition-all shadow-sm",
+                        dragOverGroup === groupName && !editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950",
+                        dragOverFolder === groupName && editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950 scale-105",
                         draggedFolder === groupName && "opacity-50",
                         editMode && "cursor-move",
                       )}
@@ -1110,14 +1308,32 @@ export default function IgnitionLauncher() {
                         }
                       }}
                     >
-                      <AccordionTrigger className="px-4 hover:no-underline">
-                        <div className="flex items-center gap-2">
-                          {editMode && <GripVertical className="h-5 w-5 text-muted-foreground" />}
-                          <Folder className="h-5 w-5 text-muted-foreground" />
-                          <span className="text-lg font-semibold">{groupName}</span>
-                          <span className="text-sm font-normal text-muted-foreground">({designers.length})</span>
-                        </div>
-                      </AccordionTrigger>
+                      <div className="flex items-center justify-between w-full px-4 py-3">
+                        <AccordionTrigger className="flex-1 hover:no-underline py-0 pr-4">
+                          <div className="flex items-center gap-2">
+                            {editMode && <GripVertical className="h-5 w-5 text-muted-foreground" />}
+                            <Folder className="h-5 w-5 text-muted-foreground" />
+                            <span className="text-lg font-semibold">{groupName}</span>
+                            <span className="text-sm font-normal text-muted-foreground">({designers.length})</span>
+                          </div>
+                        </AccordionTrigger>
+                        {!editMode && designers.length > 0 && (
+                          <Button
+                            className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              designers.forEach((designer, index) => {
+                                setTimeout(() => {
+                                  openDesigner(designer)
+                                }, index * 100)
+                              })
+                            }}
+                          >
+                            <Play className="h-4 w-4" />
+                            Launch All
+                          </Button>
+                        )}
+                      </div>
                       <AccordionContent className="px-4 pb-4">
                         {viewMode === "grid" ? (
                           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -1289,7 +1505,7 @@ export default function IgnitionLauncher() {
                   id="group"
                   value={editingDesigner.group || ""}
                   onChange={(e) => setEditingDesigner({ ...editingDesigner, group: e.target.value })}
-                  placeholder="Building 1"
+                  placeholder="Group 1"
                 />
               </div>
               <div>
@@ -1420,11 +1636,11 @@ function DesignerCard({
       onDragLeave={onDragLeave}
       onDrop={(e) => !disabled && onDrop(e, designer, groupName)}
       className={cn(
-        "group relative rounded border border-[#ddd] bg-white p-4 transition-all hover:border-[#2c5f8d] hover:shadow-md",
+        "group relative rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-700 p-4 transition-all hover:border-blue-500 hover:shadow-md",
         !disabled && "cursor-move",
         disabled && "cursor-default",
         isDragging && "opacity-50",
-        isDraggedOver && "border-[#2c5f8d] border-2 scale-105 shadow-lg", // Visual feedback when dragged over
+        isDraggedOver && "border-blue-500 border-2 scale-105 shadow-lg", // Visual feedback when dragged over
       )}
     >
       {!disabled && (
@@ -1463,6 +1679,58 @@ function DesignerCard({
               <Settings className="mr-2 h-4 w-4" />
               Edit
             </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+
+                // Convert to Ignition launcher format
+                const jvmArgs = []
+                if (designer.project) {
+                  jvmArgs.push(`-Dproject.name=${designer.project}`)
+                }
+
+                const exportData = {
+                  "window.mode": null,
+                  "timeout": 30,
+                  "screen": null,
+                  "retries": -1,
+                  "init.heap": null,
+                  "max.heap": null,
+                  "sun.java2d.d3d": null,
+                  "sun.java2d.noddraw": null,
+                  "jvm.arguments": jvmArgs,
+                  "client.tag.overrides": {},
+                  "fallback.application": "",
+                  "use.custom.jre": false,
+                  "custom.jre.path": "${JAVA_HOME}/bin/java",
+                  "signature.verification.suppress.legacy": false,
+                  "name": designer.name,
+                  "description": null,
+                  "gateway.info": {
+                    "gateway.name": designer.name,
+                    "gateway.address": designer.url,
+                    "redundant.gateways": []
+                  },
+                  "last.updated": Date.now(),
+                  "image.path": null,
+                  "favorite": designer.isFavorite
+                }
+
+                // Download as JSON file
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${designer.name}.json`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+              }}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Export
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive"
@@ -1477,40 +1745,46 @@ function DesignerCard({
         </DropdownMenu>
       </div>
 
-      {designer.isFavorite && <Star className="absolute right-3 top-3 h-4 w-4 fill-yellow-500 text-yellow-500" />}
-
       <div className="mt-6 space-y-3">
         <div>
-          <h3 className="font-semibold text-balance">{designer.name}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-balance flex-1">{designer.name}</h3>
+            {designer.isFavorite && <Star className="h-4 w-4 fill-yellow-500 text-yellow-500 flex-shrink-0" />}
+          </div>
           <p className="mt-1 text-xs text-muted-foreground truncate">{designer.url}</p>
         </div>
 
         <Badge
-          className={cn(
-            "capitalize border-transparent",
-            designer.environment === "production" && "bg-green-500/10 text-green-600 hover:bg-green-500/20",
-            designer.environment === "staging" && "bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20",
-            designer.environment === "development" && "bg-blue-500/10 text-blue-500 hover:bg-blue-500/20",
-            designer.environment === "local" && "bg-gray-500/10 text-gray-600 hover:bg-gray-500/20",
-          )}
+          variant={undefined}
+          className="capitalize border-transparent"
+          style={{
+            backgroundColor: designer.environment === "production" ? "rgb(220 252 231)" :
+                           designer.environment === "staging" ? "rgb(254 249 195)" :
+                           designer.environment === "development" ? "rgb(219 234 254)" :
+                           designer.environment === "local" ? "rgb(255 237 213)" : undefined,
+            color: designer.environment === "production" ? "rgb(21 128 61)" :
+                   designer.environment === "staging" ? "rgb(161 98 7)" :
+                   designer.environment === "development" ? "rgb(29 78 216)" :
+                   designer.environment === "local" ? "rgb(194 65 12)" : undefined,
+          }}
         >
           {designer.environment}
         </Badge>
 
         <div className="flex flex-wrap gap-1">
           {designer.tags.slice(0, 3).map((tag) => (
-            <Badge key={tag} variant="outline" className="text-xs">
+            <Badge key={tag} className="text-xs bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-700 border-0 rounded-full">
               {tag}
             </Badge>
           ))}
           {designer.tags.length > 3 && (
-            <Badge variant="outline" className="text-xs">
+            <Badge className="text-xs bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-700 border-0 rounded-full">
               +{designer.tags.length - 3}
             </Badge>
           )}
         </div>
 
-        <Button className="w-full gap-2 bg-[#2c5f8d] hover:bg-[#234a6d]" size="sm" onClick={() => onOpen(designer)}>
+        <Button className="w-full gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] text-white" size="sm" onClick={() => onOpen(designer)}>
           <ExternalLink className="h-4 w-4" />
           Open Designer
         </Button>
@@ -1559,34 +1833,38 @@ function DesignerListItem({
       onDragLeave={onDragLeave}
       onDrop={(e) => !disabled && onDrop(e, designer, groupName)}
       className={cn(
-        "group flex items-center gap-4 rounded border border-[#ddd] bg-white p-4 transition-all hover:border-[#2c5f8d] hover:shadow-md",
+        "group flex items-center gap-4 rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-700 p-4 transition-all hover:border-blue-500 hover:shadow-md",
         !disabled && "cursor-move",
         disabled && "cursor-default",
         isDragging && "opacity-50",
-        isDraggedOver && "border-[#2c5f8d] border-2 scale-[1.02] shadow-lg", // Visual feedback when dragged over
+        isDraggedOver && "border-blue-500 border-2 scale-[1.02] shadow-lg", // Visual feedback when dragged over
       )}
     >
       {!disabled && (
         <GripVertical className="h-5 w-5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-50" />
       )}
 
-      <div className="flex items-center gap-3">
-        {designer.isFavorite && <Star className="h-4 w-4 fill-yellow-500 text-yellow-500" />}
-      </div>
-
       <div className="flex-1 min-w-0">
-        <h3 className="font-semibold">{designer.name}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="font-semibold">{designer.name}</h3>
+          {designer.isFavorite && <Star className="h-4 w-4 fill-yellow-500 text-yellow-500 flex-shrink-0" />}
+        </div>
         <p className="text-sm text-muted-foreground truncate">{designer.url}</p>
       </div>
 
       <Badge
-        className={cn(
-          "capitalize border-transparent",
-          designer.environment === "production" && "bg-green-500/10 text-green-600",
-          designer.environment === "staging" && "bg-yellow-500/10 text-yellow-600",
-          designer.environment === "development" && "bg-blue-500/10 text-blue-500",
-          designer.environment === "local" && "bg-gray-500/10 text-gray-600",
-        )}
+        variant={undefined}
+        className="capitalize border-transparent"
+        style={{
+          backgroundColor: designer.environment === "production" ? "rgb(220 252 231)" :
+                         designer.environment === "staging" ? "rgb(254 249 195)" :
+                         designer.environment === "development" ? "rgb(219 234 254)" :
+                         designer.environment === "local" ? "rgb(255 237 213)" : undefined,
+          color: designer.environment === "production" ? "rgb(21 128 61)" :
+                 designer.environment === "staging" ? "rgb(161 98 7)" :
+                 designer.environment === "development" ? "rgb(29 78 216)" :
+                 designer.environment === "local" ? "rgb(194 65 12)" : undefined,
+        }}
       >
         {designer.environment}
       </Badge>
@@ -1633,6 +1911,58 @@ function DesignerListItem({
             >
               <Settings className="mr-2 h-4 w-4" />
               Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+
+                // Convert to Ignition launcher format
+                const jvmArgs = []
+                if (designer.project) {
+                  jvmArgs.push(`-Dproject.name=${designer.project}`)
+                }
+
+                const exportData = {
+                  "window.mode": null,
+                  "timeout": 30,
+                  "screen": null,
+                  "retries": -1,
+                  "init.heap": null,
+                  "max.heap": null,
+                  "sun.java2d.d3d": null,
+                  "sun.java2d.noddraw": null,
+                  "jvm.arguments": jvmArgs,
+                  "client.tag.overrides": {},
+                  "fallback.application": "",
+                  "use.custom.jre": false,
+                  "custom.jre.path": "${JAVA_HOME}/bin/java",
+                  "signature.verification.suppress.legacy": false,
+                  "name": designer.name,
+                  "description": null,
+                  "gateway.info": {
+                    "gateway.name": designer.name,
+                    "gateway.address": designer.url,
+                    "redundant.gateways": []
+                  },
+                  "last.updated": Date.now(),
+                  "image.path": null,
+                  "favorite": designer.isFavorite
+                }
+
+                // Download as JSON file
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `${designer.name}.json`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+              }}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Export
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

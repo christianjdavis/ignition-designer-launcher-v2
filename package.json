@@ -1,12 +1,17 @@
 {
-  "name": "my-v0-project",
+  "name": "designer-launcher-v2",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
-    "build": "next build",
-    "dev": "next dev",
+    "dev": "concurrently \"cross-env NODE_ENV=development next dev\" \"wait-on http://localhost:3000 && cross-env NODE_ENV=development electron .\"",
+    "build": "next build && node scripts/fix-paths.js",
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:mac": "npm run build && electron-builder --mac",
+    "electron:build:win": "npm run build && electron-builder --win",
+    "electron:build:linux": "npm run build && electron-builder --linux",
     "lint": "next lint",
-    "start": "next start"
+    "start": "electron ."
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -66,9 +71,59 @@
     "@types/node": "^22",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12",
+    "nextron": "^9.5.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
     "tw-animate-css": "1.3.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^9.0.1"
+  },
+  "build": {
+    "appId": "com.designer-launcher.app",
+    "productName": "Designer Launcher v2",
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false,
+    "files": [
+      "electron/**/*",
+      "out/**/*",
+      "public/**/*"
+    ],
+    "directories": {
+      "buildResources": "public",
+      "output": "dist"
+    },
+    "protocols": {
+      "name": "app",
+      "schemes": [
+        "app"
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "public/launcher.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "public/launcher.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "icon": "public/launcher.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
   }
 }

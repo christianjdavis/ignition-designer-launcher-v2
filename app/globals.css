@@ -1,5 +1,8 @@
 @import "tailwindcss";
+@import "tailwindcss/theme" layer(theme);
 @import "tw-animate-css";
+
+@variant dark (&:where(.dark, .dark *));
 
 :root {
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
