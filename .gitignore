@@ -29,3 +29,7 @@ next-env.d.ts
 # Gateway configuration (user-specific)
 gateways.json
 custom-tags.json
+
+# Electron build outputs
+/dist
+/dist-electron
