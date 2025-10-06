@@ -9,6 +9,7 @@ let mainWindow
 const userDataPath = app.getPath('userData')
 const gatewaysFilePath = path.join(userDataPath, 'gateways.json')
 const tagsFilePath = path.join(userDataPath, 'tags.json')
+const foldersFilePath = path.join(userDataPath, 'folders.json')
 
 // Ensure data files exist
 async function ensureDataFiles() {
@@ -22,6 +23,12 @@ async function ensureDataFiles() {
     await fs.promises.access(tagsFilePath)
   } catch {
     await fs.promises.writeFile(tagsFilePath, '[]')
+  }
+
+  try {
+    await fs.promises.access(foldersFilePath)
+  } catch {
+    await fs.promises.writeFile(foldersFilePath, '[]')
   }
 }
 
@@ -64,6 +71,31 @@ ipcMain.handle('save-tags', async (event, tags) => {
     console.error('Error saving tags:', error)
     return { success: false, error: error.message }
   }
+})
+
+ipcMain.handle('get-folders', async () => {
+  try {
+    const data = await fs.promises.readFile(foldersFilePath, 'utf-8')
+    return JSON.parse(data)
+  } catch (error) {
+    console.error('Error reading folders:', error)
+    return []
+  }
+})
+
+ipcMain.handle('save-folders', async (event, folders) => {
+  try {
+    await fs.promises.writeFile(foldersFilePath, JSON.stringify(folders, null, 2))
+    return { success: true }
+  } catch (error) {
+    console.error('Error saving folders:', error)
+    return { success: false, error: error.message }
+  }
+})
+
+ipcMain.handle('open-external', async (event, url) => {
+  const { shell } = require('electron')
+  await shell.openExternal(url)
 })
 
 function createWindow() {

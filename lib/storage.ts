@@ -7,6 +7,8 @@ declare global {
       saveGateways: (gateways: any[]) => Promise<{ success: boolean }>
       getTags: () => Promise<string[]>
       saveTags: (tags: string[]) => Promise<{ success: boolean }>
+      getFolders: () => Promise<string[]>
+      saveFolders: (folders: string[]) => Promise<{ success: boolean }>
       isElectron: boolean
     }
   }
@@ -66,6 +68,28 @@ export async function saveTags(tags: string[]) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(tags),
+    })
+    return await response.json()
+  }
+}
+
+export async function getFolders() {
+  if (isElectron() && window.electronAPI) {
+    return await window.electronAPI.getFolders()
+  } else {
+    const response = await fetch('/api/folders')
+    return await response.json()
+  }
+}
+
+export async function saveFolders(folders: string[]) {
+  if (isElectron() && window.electronAPI) {
+    return await window.electronAPI.saveFolders(folders)
+  } else {
+    const response = await fetch('/api/folders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(folders),
     })
     return await response.json()
   }

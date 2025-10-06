@@ -53,13 +53,20 @@ interface Designer {
   id: string
   name: string
   url: string
+  urls?: { // Multiple environment URLs
+    production?: string
+    staging?: string
+    development?: string
+    local?: string
+  }
   project?: string // Project name for designer deep link
   status: "online" | "offline"
   environment: "production" | "staging" | "development" | "local"
   tags: string[]
   isFavorite: boolean
   lastAccessed: Date
-  group?: string
+  group?: string // Deprecated - for backward compatibility
+  folderPath?: string // Hierarchical folder path like "Building 1/Production"
   order?: number // Added order field for sorting within groups
 }
 
@@ -328,23 +335,77 @@ export default function IgnitionLauncher() {
   const [draggedFolder, setDraggedFolder] = useState<string | null>(null)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
   const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
-  const [newFolderName, setNewFolderName] = useState("")
+  const [renamingFolderValue, setRenamingFolderValue] = useState("")
   const [viewMode, setViewMode] = useState<ViewMode>("grid")
   const [filterTab, setFilterTab] = useState<FilterTab>("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [selectedEnvironments, setSelectedEnvironments] = useState<string[]>([])
-  const [groupBy, setGroupBy] = useState<"none" | "group" | "environment">("group")
+  const groupBy = "group" // Always group by location/folder
   const [editingDesigner, setEditingDesigner] = useState<Designer | null>(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editTagsMode, setEditTagsMode] = useState(false)
   const [openFolders, setOpenFolders] = useState<string[]>([])
 
+  // Folder management state
+  const [folders, setFolders] = useState<string[]>([])
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false)
+  const [editingFolder, setEditingFolder] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState("")
+  const [newFolderParent, setNewFolderParent] = useState<string>("")
+
+  // Environment filter state per folder
+  const [folderEnvironments, setFolderEnvironments] = useState<Record<string, "production" | "staging" | "development" | "local" | "all">>({})
+
+  const setFolderEnvironment = (folderPath: string, env: "production" | "staging" | "development" | "local" | "all") => {
+    setFolderEnvironments(prev => ({...prev, [folderPath]: env}))
+  }
+
+  // Folder order state - maps parent folder path to ordered list of child folder names
+  const [folderOrder, setFolderOrder] = useState<Record<string, string[]>>({})
+
+  // Auto-discover folders from existing designers
+  useEffect(() => {
+    const discoveredFolders = new Set<string>()
+    designers.forEach((d) => {
+      if (d.folderPath) {
+        discoveredFolders.add(d.folderPath)
+        // Also add parent folders
+        const parts = d.folderPath.split('/')
+        for (let i = 1; i < parts.length; i++) {
+          discoveredFolders.add(parts.slice(0, i).join('/'))
+        }
+      }
+    })
+
+    // Merge with existing folders (to keep manually created empty folders)
+    setFolders(prev => {
+      const merged = new Set([...prev, ...Array.from(discoveredFolders)])
+      return Array.from(merged).sort()
+    })
+  }, [designers])
+
+  // Get the effective URL for a designer based on folder environment selection
+  const getDesignerUrl = (designer: Designer, folderPath?: string): string => {
+    // If designer has multi-environment URLs and a folder environment is selected, use that
+    if (designer.urls && folderPath) {
+      const selectedEnv = folderEnvironments[folderPath]
+      if (selectedEnv && selectedEnv !== "all" && designer.urls[selectedEnv]) {
+        return designer.urls[selectedEnv]
+      }
+    }
+
+    // Fall back to the default url field
+    return designer.url
+  }
+
   // Generate Ignition designer deep link
-  const generateDesignerLink = (designer: Designer): string => {
+  const generateDesignerLink = (designer: Designer, folderPath?: string): string => {
+    // Get the appropriate URL based on environment selection
+    const url = getDesignerUrl(designer, folderPath)
+
     // Extract hostname from URL (remove http:// or https://, port, and trailing slash)
-    let hostname = designer.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    let hostname = url.replace(/^https?:\/\//, "").replace(/\/$/, "")
 
     // Remove any existing port from the hostname
     hostname = hostname.split(':')[0]
@@ -354,13 +415,13 @@ export default function IgnitionLauncher() {
 
     // Build deep link: designer://Gateway or designer://Gateway/projectName
     // Add insecure=true if the original URL was HTTP
-    const isHttp = designer.url.startsWith('http://')
+    const isHttp = url.startsWith('http://')
     const baseLink = designer.project ? `designer://${gateway}/${designer.project}` : `designer://${gateway}`
 
     return isHttp ? `${baseLink}?insecure=true` : baseLink
   }
 
-  const openDesigner = async (designer: Designer) => {
+  const openDesigner = async (designer: Designer, folderPath?: string) => {
     // Update lastAccessed date with full timestamp for better sorting
     const now = new Date()
     const updatedDesigners = designers.map((d) =>
@@ -380,15 +441,13 @@ export default function IgnitionLauncher() {
       console.error('Failed to save lastAccessed:', error)
     }
 
-    // Open designer
-    const deepLink = generateDesignerLink(designer)
+    // Open designer with folder path for environment-aware URL
+    const deepLink = generateDesignerLink(designer, folderPath)
     console.log('Opening deep link:', deepLink)
     window.location.href = deepLink
   }
 
   const allTags = Array.from(new Set([...designers.flatMap((d) => d.tags), ...customTags]))
-  const environmentOrder: Designer['environment'][] = ['production', 'staging', 'development', 'local']
-  const allEnvironments = environmentOrder.filter(env => designers.some(d => d.environment === env))
 
   const addCustomTag = async (tag: string) => {
     const trimmedTag = tag.trim()
@@ -461,10 +520,6 @@ export default function IgnitionLauncher() {
         return false
       }
 
-      if (selectedEnvironments.length > 0 && !selectedEnvironments.includes(designer.environment)) {
-        return false
-      }
-
       return true
     })
     .sort((a, b) => {
@@ -479,12 +534,43 @@ export default function IgnitionLauncher() {
       return (a.order || 0) - (b.order || 0)
     })
 
+  // Build folder tree structure from flat folder paths
+  const buildFolderTree = (designers: Designer[]) => {
+    const tree: Record<string, { designers: Designer[], children: Set<string> }> = {}
+
+    designers.forEach((designer) => {
+      const folderPath = designer.folderPath || designer.group || "Ungrouped"
+
+      // Add designer ONLY to its exact folder (not to parents)
+      if (!tree[folderPath]) {
+        tree[folderPath] = { designers: [], children: new Set() }
+      }
+      tree[folderPath].designers.push(designer)
+
+      // Build parent hierarchy WITHOUT adding designers to parent folders
+      const parts = folderPath.split('/')
+      for (let i = 0; i < parts.length - 1; i++) {
+        const parentPath = parts.slice(0, i + 1).join('/')
+        const childPath = parts.slice(0, i + 2).join('/')
+
+        if (!tree[parentPath]) {
+          tree[parentPath] = { designers: [], children: new Set() }
+        }
+        tree[parentPath].children.add(childPath)
+      }
+    })
+
+    return tree
+  }
+
   const groupedDesigners =
     groupBy === "none" || filterTab === "recent"
       ? { "All Designers": filteredDesigners }
       : filteredDesigners.reduce(
           (acc, designer) => {
-            const key = groupBy === "group" ? designer.group || "Ungrouped" : designer.environment
+            const key = groupBy === "group"
+              ? designer.folderPath || designer.group || "Ungrouped"
+              : designer.environment
             if (!acc[key]) acc[key] = []
             acc[key].push(designer)
             return acc
@@ -499,11 +585,55 @@ export default function IgnitionLauncher() {
     })
   }
 
-  const [folderOrder, setFolderOrder] = useState<string[]>(Object.keys(groupedDesigners))
+  // Get folder tree when grouping by folders
+  const folderTree = groupBy === "group" && filterTab !== "recent" ? (() => {
+    const tree = buildFolderTree(filteredDesigners)
 
-  const orderedGroups = folderOrder
-    .filter((folder) => groupedDesigners[folder])
-    .concat(Object.keys(groupedDesigners).filter((folder) => !folderOrder.includes(folder)))
+    // Add empty folders from the folders state
+    folders.forEach((folderPath) => {
+      if (!tree[folderPath]) {
+        tree[folderPath] = { designers: [], children: new Set() }
+      }
+
+      // Ensure parent folders exist
+      const parts = folderPath.split('/')
+      for (let i = 0; i < parts.length - 1; i++) {
+        const parentPath = parts.slice(0, i + 1).join('/')
+        const childPath = parts.slice(0, i + 2).join('/')
+
+        if (!tree[parentPath]) {
+          tree[parentPath] = { designers: [], children: new Set() }
+        }
+        tree[parentPath].children.add(childPath)
+      }
+    })
+
+    return tree
+  })() : null
+
+  // Get top-level folders (folders that don't have a parent)
+  const topLevelFoldersArray = React.useMemo(() => {
+    return folderTree
+      ? Object.keys(folderTree).filter((path) => !path.includes('/'))
+      : Object.keys(groupedDesigners)
+  }, [folderTree, groupedDesigners])
+
+  // Sort top-level folders using custom order if available
+  const topLevelFolders = React.useMemo(() => {
+    const customTopLevelOrder = (folderOrder?.[''] || folderOrder?.['root']) ?? []
+    return customTopLevelOrder.length > 0
+      ? [...topLevelFoldersArray].sort((a, b) => {
+          const aIndex = customTopLevelOrder.indexOf(a)
+          const bIndex = customTopLevelOrder.indexOf(b)
+          if (aIndex === -1 && bIndex === -1) return a.localeCompare(b)
+          if (aIndex === -1) return 1
+          if (bIndex === -1) return -1
+          return aIndex - bIndex
+        })
+      : topLevelFoldersArray.sort()
+  }, [topLevelFoldersArray, folderOrder])
+
+  const orderedGroups = topLevelFolders
 
   // Load persisted state from localStorage on mount (client-side only)
   useEffect(() => {
@@ -542,12 +672,50 @@ export default function IgnitionLauncher() {
     localStorage.setItem('designer-launcher-openFolders', JSON.stringify(openFolders))
   }, [openFolders])
 
+  // Load folders list from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('designer-launcher-folders')
+        if (saved) {
+          setFolders(JSON.parse(saved))
+        }
+      } catch (e) {
+        console.error('Error loading folders:', e)
+      }
+    }
+  }, [])
+
+  // Persist folders list to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('designer-launcher-folders', JSON.stringify(folders))
+    }
+  }, [folders])
+
+  // Load folderOrder from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('designer-launcher-folderOrder')
+        if (saved) {
+          setFolderOrder(JSON.parse(saved))
+        }
+      } catch (e) {
+        console.error('Error loading folder order:', e)
+      }
+    }
+  }, [])
+
+  // Persist folderOrder to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('designer-launcher-folderOrder', JSON.stringify(folderOrder))
+    }
+  }, [folderOrder])
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
-  }
-
-  const toggleEnvironment = (env: string) => {
-    setSelectedEnvironments((prev) => (prev.includes(env) ? prev.filter((e) => e !== env) : [...prev, env]))
   }
 
   const openEditDialog = (designer: Designer) => {
@@ -603,9 +771,14 @@ export default function IgnitionLauncher() {
     setDesigners((prev) => prev.map((d) => (d.id === designerId ? { ...d, isFavorite: !d.isFavorite } : d)))
   }
 
-  const deleteDesigner = (designerId: string) => {
+  const deleteDesigner = async (designerId: string) => {
     if (confirm('Are you sure you want to delete this designer?')) {
-      setDesigners((prev) => prev.filter((d) => d.id !== designerId))
+      const updatedDesigners = designers.filter((d) => d.id !== designerId)
+      setDesigners(updatedDesigners)
+      await storage.saveGateways(updatedDesigners.map(d => ({
+        ...d,
+        lastAccessed: d.lastAccessed.toISOString(),
+      })))
     }
   }
 
@@ -722,7 +895,11 @@ export default function IgnitionLauncher() {
     setDragOverDesigner(null)
   }
 
-  const handleFolderDragStart = (folderName: string) => {
+  const handleFolderDragStart = (folderName: string, e?: React.DragEvent) => {
+    console.log('Folder drag start:', folderName, 'editMode:', editMode)
+    if (e) {
+      e.stopPropagation() // Prevent bubbling to parent folders
+    }
     if (editMode) {
       setDraggedFolder(folderName)
     }
@@ -736,6 +913,8 @@ export default function IgnitionLauncher() {
   const handleFolderDragOver = (e: React.DragEvent, folderName: string) => {
     if (editMode && draggedFolder) {
       e.preventDefault()
+      e.stopPropagation()
+      console.log('Folder drag over:', folderName, 'dragged:', draggedFolder)
       setDragOverFolder(folderName)
     }
   }
@@ -748,42 +927,120 @@ export default function IgnitionLauncher() {
     e.preventDefault()
     e.stopPropagation()
 
-    if (!draggedFolder || !editMode) return
+    console.log('handleFolderDrop called:', targetFolder, 'draggedFolder:', draggedFolder, 'editMode:', editMode)
 
-    const currentIndex = orderedGroups.indexOf(draggedFolder)
-    const targetIndex = orderedGroups.indexOf(targetFolder)
+    if (!draggedFolder || !editMode) {
+      console.log('Early return - missing draggedFolder or not in editMode')
+      return
+    }
+
+    // Determine parent folder from dragged and target folder paths
+    const getDraggedParent = (path: string) => {
+      const parts = path.split('/')
+      parts.pop() // Remove the folder name itself
+      return parts.join('/') // Empty string for top-level folders
+    }
+
+    const draggedParent = getDraggedParent(draggedFolder)
+    const targetParent = getDraggedParent(targetFolder)
+
+    // Only allow reordering within same parent
+    if (draggedParent !== targetParent) return
+
+    // Get all sibling folders with current sort order applied
+    const getSortedSiblings = (parentPath: string) => {
+      if (parentPath === '') {
+        return topLevelFolders
+      }
+
+      if (!folderTree || !folderTree[parentPath]) {
+        return []
+      }
+
+      const childFoldersArray = Array.from(folderTree[parentPath].children)
+      const customOrder = folderOrder?.[parentPath] ?? []
+
+      return customOrder.length > 0
+        ? [...childFoldersArray].sort((a, b) => {
+            const aIndex = customOrder.indexOf(a)
+            const bIndex = customOrder.indexOf(b)
+            if (aIndex === -1 && bIndex === -1) return a.localeCompare(b)
+            if (aIndex === -1) return 1
+            if (bIndex === -1) return -1
+            return aIndex - bIndex
+          })
+        : childFoldersArray.sort()
+    }
+
+    const siblings = getSortedSiblings(draggedParent)
+    const currentIndex = siblings.indexOf(draggedFolder)
+    const targetIndex = siblings.indexOf(targetFolder)
 
     if (currentIndex === -1 || targetIndex === -1) return
 
-    const newOrder = [...orderedGroups]
+    const newOrder = [...siblings]
     newOrder.splice(currentIndex, 1)
     newOrder.splice(targetIndex, 0, draggedFolder)
 
-    setFolderOrder(newOrder)
+    console.log('Folder drop:', {
+      draggedFolder,
+      targetFolder,
+      draggedParent,
+      siblings,
+      currentIndex,
+      targetIndex,
+      newOrder
+    })
+
+    setFolderOrder(prev => {
+      const updated = {
+        ...prev,
+        [draggedParent]: newOrder
+      }
+      console.log('Updated folderOrder:', updated)
+      return updated
+    })
     setDraggedFolder(null)
     setDragOverFolder(null)
   }
 
   const startRenamingFolder = (folderName: string) => {
     setRenamingFolder(folderName)
-    setNewFolderName(folderName)
+    // Only show the last part of the path in the input field
+    const displayName = folderName.split('/').pop() || folderName
+    setRenamingFolderValue(displayName)
   }
 
   const saveRenamedFolder = async () => {
-    if (!renamingFolder || !newFolderName.trim() || newFolderName === renamingFolder) {
+    if (!renamingFolder || !renamingFolderValue.trim() || renamingFolderValue === renamingFolder) {
       setRenamingFolder(null)
-      setNewFolderName("")
+      setRenamingFolderValue("")
       return
     }
 
-    // Update all designers in this folder
+    // For nested folders, we need to construct the full new path
+    const folderParts = renamingFolder.split('/')
+    const newFolderName = renamingFolderValue.trim()
+
+    // Replace just the last part of the path with the new name
+    folderParts[folderParts.length - 1] = newFolderName
+    const newFolderPath = folderParts.join('/')
+
+    // Update all designers in this folder (and subfolders for nested renames)
     const updatedDesigners = designers.map((d) => {
-      const currentGroup = groupBy === "group" ? d.group || "Ungrouped" : d.environment
-      if (currentGroup === renamingFolder) {
-        if (groupBy === "group") {
-          return { ...d, group: newFolderName === "Ungrouped" ? undefined : newFolderName }
-        } else if (groupBy === "environment") {
-          return { ...d, environment: newFolderName as Designer["environment"] }
+      const currentFolderPath = d.folderPath || d.group || "Ungrouped"
+
+      // Check if this designer is in the folder being renamed or a subfolder
+      if (currentFolderPath === renamingFolder || currentFolderPath.startsWith(renamingFolder + '/')) {
+        // Replace the old folder path with the new one
+        const updatedPath = currentFolderPath === renamingFolder
+          ? newFolderPath
+          : currentFolderPath.replace(renamingFolder, newFolderPath)
+
+        return {
+          ...d,
+          folderPath: updatedPath,
+          group: updatedPath // Keep group in sync for backward compatibility
         }
       }
       return d
@@ -791,12 +1048,30 @@ export default function IgnitionLauncher() {
 
     setDesigners(updatedDesigners)
 
-    // Update folder order
-    const updatedFolderOrder = folderOrder.map((f) => (f === renamingFolder ? newFolderName : f))
+    // Update folder order - update all references to the renamed folder in the order records
+    const updatedFolderOrder = { ...folderOrder }
+    Object.keys(updatedFolderOrder).forEach(parentPath => {
+      updatedFolderOrder[parentPath] = updatedFolderOrder[parentPath].map(f =>
+        f === renamingFolder ? newFolderPath : f
+      )
+    })
     setFolderOrder(updatedFolderOrder)
 
+    // Update folders list
+    setFolders(prev => prev.map(f => {
+      if (f === renamingFolder || f.startsWith(renamingFolder + '/')) {
+        return f === renamingFolder ? newFolderPath : f.replace(renamingFolder, newFolderPath)
+      }
+      return f
+    }).sort())
+
     // Update open folders
-    const updatedOpenFolders = openFolders.map((f) => (f === renamingFolder ? newFolderName : f))
+    const updatedOpenFolders = openFolders.map((f) => {
+      if (f === renamingFolder || f.startsWith(renamingFolder + '/')) {
+        return f === renamingFolder ? newFolderPath : f.replace(renamingFolder, newFolderPath)
+      }
+      return f
+    })
     setOpenFolders(updatedOpenFolders)
 
     // Save to file
@@ -812,12 +1087,56 @@ export default function IgnitionLauncher() {
     }
 
     setRenamingFolder(null)
-    setNewFolderName("")
+    setRenamingFolderValue("")
   }
 
   const cancelRenamingFolder = () => {
     setRenamingFolder(null)
-    setNewFolderName("")
+    setRenamingFolderValue("")
+  }
+
+  const duplicateFolder = async (folderPath: string) => {
+    // Get all designers in this folder
+    const designersInFolder = designers.filter(d =>
+      (d.folderPath || d.group) === folderPath
+    )
+
+    if (designersInFolder.length === 0) {
+      console.log('No designers in folder to duplicate')
+      return
+    }
+
+    // Generate new folder name
+    let newFolderName = `${folderPath} Copy`
+    let counter = 1
+    while (folders.includes(newFolderName) || designers.some(d => (d.folderPath || d.group) === newFolderName)) {
+      counter++
+      newFolderName = `${folderPath} Copy ${counter}`
+    }
+
+    // Duplicate all designers in the folder with new IDs and folder path
+    const duplicatedDesigners = designersInFolder.map(designer => ({
+      ...designer,
+      id: `${designer.id}-copy-${Date.now()}-${Math.random()}`,
+      folderPath: newFolderName,
+      group: newFolderName,
+      lastAccessed: new Date()
+    }))
+
+    // Add duplicated designers to state
+    const updatedDesigners = [...designers, ...duplicatedDesigners]
+    setDesigners(updatedDesigners)
+
+    // Add new folder to folders list
+    setFolders(prev => [...prev, newFolderName].sort())
+
+    // Save to file
+    try {
+      await storage.saveGateways(updatedDesigners)
+      console.log(`Duplicated folder "${folderPath}" as "${newFolderName}"`)
+    } catch (error) {
+      console.error('Failed to save duplicated folder:', error)
+    }
   }
 
   return (
@@ -929,60 +1248,6 @@ export default function IgnitionLauncher() {
             </div>
 
             <div className="mt-6">
-              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">
-                Group By
-              </h3>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="mx-4 w-[calc(100%-2rem)] justify-between bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700">
-                    <span className="flex items-center gap-2">
-                      <Folder className="h-4 w-4" />
-                      {groupBy === "none" ? "None" : groupBy === "group" ? "Location" : "Environment"}
-                    </span>
-                    <ChevronDown className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  <DropdownMenuItem onClick={() => setGroupBy("none")}>None</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setGroupBy("group")}>Location</DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => setGroupBy("environment")}>Environment</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-
-            <div className="mt-6">
-              <h3 className="mb-2 px-4 text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">
-                Environment
-              </h3>
-              <div className="space-y-0">
-                {allEnvironments.map((env) => (
-                  <button
-                    key={env}
-                    onClick={() => toggleEnvironment(env)}
-                    className={cn(
-                      "flex w-full items-center gap-2 px-4 py-2 text-sm transition-colors",
-                      selectedEnvironments.includes(env)
-                        ? "bg-gray-300 dark:bg-gray-800 text-gray-900 dark:text-white"
-                        : "text-gray-700 dark:text-white hover:bg-gray-300 dark:hover:bg-gray-800",
-                    )}
-                  >
-                    <Circle
-                      className="h-2 w-2 fill-current"
-                      style={{
-                        color: env === "production" ? "rgb(34 197 94)" :
-                               env === "staging" ? "rgb(234 179 8)" :
-                               env === "development" ? "rgb(59 130 246)" :
-                               env === "local" ? "rgb(249 115 22)" : undefined
-                      }}
-                    />
-                    <span className="capitalize">{env}</span>
-                    <span className="ml-auto text-xs">{designers.filter((d) => d.environment === env).length}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-6">
               <div className="mb-2 flex items-center justify-between px-4">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-600 dark:text-white">Tags</h3>
                 <Button
@@ -1084,7 +1349,7 @@ export default function IgnitionLauncher() {
                     className="pl-9"
                   />
                 </div>
-                {(selectedTags.length > 0 || selectedEnvironments.length > 0) && (
+                {selectedTags.length > 0 && (
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-muted-foreground">Filters:</span>
                     {selectedTags.map((tag) => (
@@ -1101,27 +1366,12 @@ export default function IgnitionLauncher() {
                         </button>
                       </Badge>
                     ))}
-                    {selectedEnvironments.map((env) => (
-                      <Badge key={env} variant="secondary" className="gap-1 capitalize pr-1">
-                        {env}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            toggleEnvironment(env)
-                          }}
-                          className="ml-1 rounded-full hover:bg-background/50"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
                     <Button
                       variant="ghost"
                       size="sm"
                       className="h-6 px-2 text-xs"
                       onClick={() => {
                         setSelectedTags([])
-                        setSelectedEnvironments([])
                       }}
                     >
                       Clear all
@@ -1130,6 +1380,14 @@ export default function IgnitionLauncher() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setFolderDialogOpen(true)}
+                  className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 text-gray-900 dark:text-white bg-white dark:bg-neutral-800 hover:bg-gray-200 dark:hover:bg-neutral-700"
+                >
+                  <Folder className="h-4 w-4" />
+                  Manage Folders
+                </Button>
                 <div className="flex rounded-lg border border-gray-300 dark:border-neutral-500">
                   <Button
                     variant={viewMode === "grid" ? "default" : "ghost"}
@@ -1343,7 +1601,53 @@ export default function IgnitionLauncher() {
           </div>
 
           <div className="p-6 bg-transparent">
-            {groupBy !== "none" && filterTab !== "recent" ? (
+            {groupBy !== "none" && filterTab !== "recent" && folderTree ? (
+              <Accordion type="multiple" value={openFolders} onValueChange={setOpenFolders} className="space-y-4">
+                {topLevelFolders.map((folderPath) => (
+                  <FolderAccordion
+                    key={folderPath}
+                    folderPath={folderPath}
+                    folderTree={folderTree}
+                    viewMode={viewMode}
+                    editMode={editMode}
+                    draggedFolder={draggedFolder}
+                    dragOverFolder={dragOverFolder}
+                    dragOverGroup={dragOverGroup}
+                    renamingFolder={renamingFolder}
+                    renamingFolderValue={renamingFolderValue}
+                    setRenamingFolderValue={setRenamingFolderValue}
+                    handleFolderDragStart={handleFolderDragStart}
+                    handleFolderDragEnd={handleFolderDragEnd}
+                    handleFolderDragOver={handleFolderDragOver}
+                    handleFolderDrop={handleFolderDrop}
+                    handleDragOver={handleDragOver}
+                    handleDrop={handleDrop}
+                    startRenamingFolder={startRenamingFolder}
+                    saveRenamedFolder={saveRenamedFolder}
+                    cancelRenamingFolder={cancelRenamingFolder}
+                    duplicateFolder={duplicateFolder}
+                    openDesigner={openDesigner}
+                    designers={designers}
+                    draggedDesigner={draggedDesigner}
+                    dragOverDesigner={dragOverDesigner}
+                    handleDragStart={handleDragStart}
+                    handleDragEnd={handleDragEnd}
+                    handleDesignerDragOver={handleDesignerDragOver}
+                    handleDesignerDragLeave={handleDesignerDragLeave}
+                    handleDesignerDrop={handleDesignerDrop}
+                    openEditDialog={openEditDialog}
+                    duplicateDesigner={duplicateDesigner}
+                    toggleFavorite={toggleFavorite}
+                    deleteDesigner={deleteDesigner}
+                    folderEnvironment={folderEnvironments[folderPath] || "all"}
+                    setFolderEnvironment={setFolderEnvironment}
+                    folderEnvironments={folderEnvironments}
+                    folderOrder={folderOrder}
+                    setFolderOrder={setFolderOrder}
+                  />
+                ))}
+              </Accordion>
+            ) : groupBy !== "none" && filterTab !== "recent" ? (
               <Accordion type="multiple" value={openFolders} onValueChange={setOpenFolders} className="space-y-4">
                 {orderedGroups.map((groupName) => {
                   const designers = groupedDesigners[groupName]
@@ -1388,8 +1692,8 @@ export default function IgnitionLauncher() {
                               {renamingFolder === groupName ? (
                                 <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
                                   <Input
-                                    value={newFolderName}
-                                    onChange={(e) => setNewFolderName(e.target.value)}
+                                    value={renamingFolderValue}
+                                    onChange={(e) => setRenamingFolderValue(e.target.value)}
                                     onKeyDown={(e) => {
                                       if (e.key === "Enter") {
                                         saveRenamedFolder()
@@ -1443,28 +1747,11 @@ export default function IgnitionLauncher() {
                           <div className="flex gap-2">
                             <Button
                               className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
-                              onClick={async (e) => {
-                                e.stopPropagation()
-                                for (const designer of designers) {
-                                  const webUrl = designer.url.replace(/\/$/, '') + '/web'
-                                  if (window.electronAPI) {
-                                    await window.electronAPI.openExternal(webUrl)
-                                  } else {
-                                    window.open(webUrl, '_blank')
-                                  }
-                                }
-                              }}
-                            >
-                              <Globe className="h-4 w-4" />
-                              Open All Tabs
-                            </Button>
-                            <Button
-                              className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 designers.forEach((designer, index) => {
                                   setTimeout(() => {
-                                    openDesigner(designer)
+                                    openDesigner(designer, groupName)
                                   }, index * 100)
                                 })
                               }}
@@ -1491,7 +1778,7 @@ export default function IgnitionLauncher() {
                                 isDragging={draggedDesigner?.id === designer.id}
                                 isDraggedOver={dragOverDesigner === designer.id}
                                 disabled={editMode}
-                                onOpen={openDesigner}
+                                onOpen={(d) => openDesigner(d, groupName)}
                                 onEdit={openEditDialog}
                                 onDuplicate={duplicateDesigner}
                                 onToggleFavorite={toggleFavorite}
@@ -1514,7 +1801,7 @@ export default function IgnitionLauncher() {
                                 isDragging={draggedDesigner?.id === designer.id}
                                 isDraggedOver={dragOverDesigner === designer.id}
                                 disabled={editMode}
-                                onOpen={openDesigner}
+                                onOpen={(d) => openDesigner(d, groupName)}
                                 onEdit={openEditDialog}
                                 onDuplicate={duplicateDesigner}
                                 onToggleFavorite={toggleFavorite}
@@ -1544,7 +1831,7 @@ export default function IgnitionLauncher() {
                         onDrop={handleDesignerDrop}
                         isDragging={draggedDesigner?.id === designer.id}
                         isDraggedOver={dragOverDesigner === designer.id}
-                        onOpen={openDesigner}
+                        onOpen={(d) => openDesigner(d, designer.folderPath || designer.group)}
                         onEdit={openEditDialog}
                         onDuplicate={duplicateDesigner}
                         onToggleFavorite={toggleFavorite}
@@ -1566,7 +1853,7 @@ export default function IgnitionLauncher() {
                         onDrop={handleDesignerDrop}
                         isDragging={draggedDesigner?.id === designer.id}
                         isDraggedOver={dragOverDesigner === designer.id}
-                        onOpen={openDesigner}
+                        onOpen={(d) => openDesigner(d, designer.folderPath || designer.group)}
                         onEdit={openEditDialog}
                         onDuplicate={duplicateDesigner}
                         onToggleFavorite={toggleFavorite}
@@ -1591,6 +1878,264 @@ export default function IgnitionLauncher() {
         </main>
       </div>
 
+      {/* Folder Management Dialog */}
+      <Dialog open={folderDialogOpen} onOpenChange={setFolderDialogOpen}>
+        <DialogContent className="max-w-2xl bg-white dark:bg-neutral-900">
+          <DialogHeader>
+            <DialogTitle className="text-gray-900 dark:text-white">Manage Folders</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-gray-900 dark:text-white">Existing Folders</Label>
+              <div className="border rounded-md p-2 max-h-64 overflow-y-auto bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600">
+                {folders.length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-2">No folders yet. Create one below.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {folders.map((folder) => {
+                      const level = folder.split('/').length - 1
+                      const displayName = folder.split('/').pop() || folder
+                      return (
+                        <div
+                          key={folder}
+                          className="flex items-center justify-between p-2 rounded hover:bg-gray-100 dark:hover:bg-neutral-700"
+                          style={{ paddingLeft: `${(level * 16) + 8}px` }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Folder className="h-4 w-4 text-muted-foreground" />
+                            <span className="text-sm text-gray-900 dark:text-white">{displayName}</span>
+                            {level > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                in {folder.split('/').slice(0, -1).join('/')}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setEditingFolder(folder)
+                                setNewFolderName(folder.split('/').pop() || '')
+                                const parentParts = folder.split('/')
+                                parentParts.pop()
+                                setNewFolderParent(parentParts.join('/') || '')
+                              }}
+                              className="h-7 px-2"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={async () => {
+                                if (confirm(`Delete folder "${folder}"? Designers in this folder will be moved to the parent folder or ungrouped.`)) {
+                                  // Get parent folder path
+                                  const folderParts = folder.split('/')
+                                  folderParts.pop()
+                                  const parentFolder = folderParts.join('/') || undefined
+
+                                  // Remove folder from all designers and move them to parent
+                                  const updatedDesigners = designers.map((d) => {
+                                    const currentPath = d.folderPath || d.group
+                                    if (currentPath === folder) {
+                                      return {
+                                        ...d,
+                                        folderPath: parentFolder,
+                                        group: parentFolder
+                                      }
+                                    }
+                                    // Also update any subfolders
+                                    if (currentPath && currentPath.startsWith(folder + '/')) {
+                                      const newPath = parentFolder
+                                        ? currentPath.replace(folder, parentFolder)
+                                        : currentPath.replace(folder + '/', '')
+                                      return {
+                                        ...d,
+                                        folderPath: newPath,
+                                        group: newPath
+                                      }
+                                    }
+                                    return d
+                                  })
+                                  setDesigners(updatedDesigners)
+
+                                  // Remove folder from folders list (including subfolders)
+                                  setFolders(prev => prev.filter(f => f !== folder && !f.startsWith(folder + '/')))
+
+                                  // Remove folder from folder order
+                                  setFolderOrder(prev => {
+                                    const updated = { ...prev }
+                                    delete updated[folder]
+                                    return updated
+                                  })
+
+                                  // Save to file
+                                  try {
+                                    await storage.saveGateways(
+                                      updatedDesigners.map((d) => ({
+                                        ...d,
+                                        lastAccessed: d.lastAccessed.toISOString(),
+                                      }))
+                                    )
+                                  } catch (error) {
+                                    console.error('Failed to save gateways:', error)
+                                  }
+                                }
+                              }}
+                              className="h-7 px-2 text-destructive"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t pt-4">
+              <Label className="text-gray-900 dark:text-white">
+                {editingFolder ? 'Edit Folder' : 'Create New Folder'}
+              </Label>
+              <div className="space-y-2">
+                <div className="space-y-2">
+                  <Label htmlFor="new-folder-parent" className="text-sm text-gray-900 dark:text-white">
+                    Parent Folder (optional)
+                  </Label>
+                  <Select
+                    value={newFolderParent || "none"}
+                    onValueChange={(value) => setNewFolderParent(value === "none" ? "" : value)}
+                  >
+                    <SelectTrigger id="new-folder-parent" className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600">
+                      <SelectItem value="none" className="text-gray-900 dark:text-white">None (top level)</SelectItem>
+                      {folders
+                        .filter((f) => f !== editingFolder)
+                        .map((folder) => (
+                          <SelectItem key={folder} value={folder} className="text-gray-900 dark:text-white">
+                            {folder}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    id="new-folder-name"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="Folder Name"
+                    className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        const fullPath = newFolderParent
+                          ? `${newFolderParent}/${newFolderName.trim()}`
+                          : newFolderName.trim()
+
+                        if (!fullPath) return
+
+                        if (editingFolder) {
+                          // Update existing folder
+                          const updatedDesigners = designers.map((d) =>
+                            d.folderPath === editingFolder ? { ...d, folderPath: fullPath } : d
+                          )
+                          setDesigners(updatedDesigners)
+
+                          // Save to file
+                          storage.saveGateways(
+                            updatedDesigners.map((d) => ({
+                              ...d,
+                              lastAccessed: d.lastAccessed.toISOString(),
+                            }))
+                          ).catch((error) => {
+                            console.error('Failed to save gateways:', error)
+                          })
+
+                          setEditingFolder(null)
+                        } else {
+                          // Create new folder - just add it to the folders list
+                          // It will be persisted when a designer is assigned to it
+                          setFolders((prev) => [...prev, fullPath].sort())
+                        }
+
+                        setNewFolderName('')
+                        setNewFolderParent('')
+                      } else if (e.key === 'Escape') {
+                        setEditingFolder(null)
+                        setNewFolderName('')
+                        setNewFolderParent('')
+                      }
+                    }}
+                  />
+                  <Button
+                    onClick={() => {
+                      const fullPath = newFolderParent
+                        ? `${newFolderParent}/${newFolderName.trim()}`
+                        : newFolderName.trim()
+
+                      if (!fullPath) return
+
+                      if (editingFolder) {
+                        // Update existing folder
+                        const updatedDesigners = designers.map((d) =>
+                          d.folderPath === editingFolder ? { ...d, folderPath: fullPath } : d
+                        )
+                        setDesigners(updatedDesigners)
+
+                        // Save to file
+                        storage.saveGateways(
+                          updatedDesigners.map((d) => ({
+                            ...d,
+                            lastAccessed: d.lastAccessed.toISOString(),
+                          }))
+                        ).catch((error) => {
+                          console.error('Failed to save gateways:', error)
+                        })
+
+                        setEditingFolder(null)
+                      } else {
+                        // Create new folder - just add it to the folders list
+                        // It will be persisted when a designer is assigned to it
+                        setFolders((prev) => [...prev, fullPath].sort())
+                      }
+
+                      setNewFolderName('')
+                      setNewFolderParent('')
+                    }}
+                    className="bg-slate-600 hover:bg-slate-500 text-white"
+                  >
+                    {editingFolder ? 'Update' : 'Create'}
+                  </Button>
+                  {editingFolder && (
+                    <Button
+                      onClick={() => {
+                        setEditingFolder(null)
+                        setNewFolderName('')
+                        setNewFolderParent('')
+                      }}
+                      variant="ghost"
+                    >
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setFolderDialogOpen(false)} className="bg-slate-600 hover:bg-slate-500 text-white">
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Edit Designer Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
         <DialogContent className="max-w-2xl bg-white dark:bg-neutral-900">
@@ -1608,15 +2153,66 @@ export default function IgnitionLauncher() {
                   className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white selection:bg-blue-600 selection:text-white"
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="url" className="text-gray-900 dark:text-white">Gateway URL</Label>
-                <Input
-                  id="url"
-                  value={editingDesigner.url}
-                  onChange={(e) => setEditingDesigner({ ...editingDesigner, url: e.target.value })}
-                  placeholder="http://gateway.example.com"
-                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-                />
+              <div className="space-y-3">
+                <Label className="text-gray-900 dark:text-white">Environment URLs</Label>
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="url-production" className="text-sm text-gray-600 dark:text-gray-400">Production</Label>
+                    <Input
+                      id="url-production"
+                      value={editingDesigner.urls?.production || ""}
+                      onChange={(e) => setEditingDesigner({
+                        ...editingDesigner,
+                        urls: { ...editingDesigner.urls, production: e.target.value },
+                        url: editingDesigner.environment === "production" ? e.target.value : editingDesigner.url
+                      })}
+                      placeholder="http://gateway.production.com"
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="url-staging" className="text-sm text-gray-600 dark:text-gray-400">Staging</Label>
+                    <Input
+                      id="url-staging"
+                      value={editingDesigner.urls?.staging || ""}
+                      onChange={(e) => setEditingDesigner({
+                        ...editingDesigner,
+                        urls: { ...editingDesigner.urls, staging: e.target.value },
+                        url: editingDesigner.environment === "staging" ? e.target.value : editingDesigner.url
+                      })}
+                      placeholder="http://gateway.staging.com"
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="url-development" className="text-sm text-gray-600 dark:text-gray-400">Development</Label>
+                    <Input
+                      id="url-development"
+                      value={editingDesigner.urls?.development || ""}
+                      onChange={(e) => setEditingDesigner({
+                        ...editingDesigner,
+                        urls: { ...editingDesigner.urls, development: e.target.value },
+                        url: editingDesigner.environment === "development" ? e.target.value : editingDesigner.url
+                      })}
+                      placeholder="http://gateway.development.com"
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="url-local" className="text-sm text-gray-600 dark:text-gray-400">Local</Label>
+                    <Input
+                      id="url-local"
+                      value={editingDesigner.urls?.local || ""}
+                      onChange={(e) => setEditingDesigner({
+                        ...editingDesigner,
+                        urls: { ...editingDesigner.urls, local: e.target.value },
+                        url: editingDesigner.environment === "local" ? e.target.value : editingDesigner.url
+                      })}
+                      placeholder="http://gateway.local.com"
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                    />
+                  </div>
+                </div>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="project" className="text-gray-900 dark:text-white">Project Name (optional)</Label>
@@ -1629,33 +2225,25 @@ export default function IgnitionLauncher() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="environment" className="text-gray-900 dark:text-white">Environment</Label>
+                <Label htmlFor="folder" className="text-gray-900 dark:text-white">Folder</Label>
                 <Select
-                  value={editingDesigner.environment}
+                  value={editingDesigner.folderPath || "none"}
                   onValueChange={(value) =>
-                    setEditingDesigner({ ...editingDesigner, environment: value as Designer["environment"] })
+                    setEditingDesigner({ ...editingDesigner, folderPath: value === "none" ? undefined : value })
                   }
                 >
-                  <SelectTrigger id="environment" className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white">
+                  <SelectTrigger id="folder" className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600">
-                    <SelectItem value="production" className="text-gray-900 dark:text-white">Production</SelectItem>
-                    <SelectItem value="staging" className="text-gray-900 dark:text-white">Staging</SelectItem>
-                    <SelectItem value="development" className="text-gray-900 dark:text-white">Development</SelectItem>
-                    <SelectItem value="local" className="text-gray-900 dark:text-white">Local</SelectItem>
+                    <SelectItem value="none" className="text-gray-900 dark:text-white">No folder</SelectItem>
+                    {folders.map((folder) => (
+                      <SelectItem key={folder} value={folder} className="text-gray-900 dark:text-white">
+                        {folder}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="group" className="text-gray-900 dark:text-white">Group</Label>
-                <Input
-                  id="group"
-                  value={editingDesigner.group || ""}
-                  onChange={(e) => setEditingDesigner({ ...editingDesigner, group: e.target.value })}
-                  placeholder="Group 1"
-                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
-                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tags" className="text-gray-900 dark:text-white">Tags</Label>
@@ -1763,6 +2351,8 @@ function DesignerCard({
   onDuplicate,
   onToggleFavorite,
   onDelete,
+  currentUrl,
+  currentEnvironment,
 }: {
   designer: Designer
   groupName: string
@@ -1779,6 +2369,8 @@ function DesignerCard({
   onDuplicate: (designer: Designer) => void
   onToggleFavorite: (designerId: string) => void
   onDelete: (designerId: string) => void
+  currentUrl?: string
+  currentEnvironment?: string
 }) {
   return (
     <div
@@ -1913,24 +2505,26 @@ function DesignerCard({
             <h3 className="font-semibold text-balance flex-1">{designer.name}</h3>
             {designer.isFavorite && <Star className="h-4 w-4 fill-yellow-500 text-yellow-500 flex-shrink-0" />}
           </div>
-          <p className="mt-1 text-xs text-muted-foreground truncate">{designer.url}</p>
+          <p className="mt-1 text-xs text-muted-foreground truncate">
+            {currentUrl || `No URL configured for ${currentEnvironment || designer.environment} environment`}
+          </p>
         </div>
 
         <Badge
           variant={undefined}
           className="capitalize border-transparent"
           style={{
-            backgroundColor: designer.environment === "production" ? "rgb(220 252 231)" :
-                           designer.environment === "staging" ? "rgb(254 249 195)" :
-                           designer.environment === "development" ? "rgb(219 234 254)" :
-                           designer.environment === "local" ? "rgb(255 237 213)" : undefined,
-            color: designer.environment === "production" ? "rgb(21 128 61)" :
-                   designer.environment === "staging" ? "rgb(161 98 7)" :
-                   designer.environment === "development" ? "rgb(29 78 216)" :
-                   designer.environment === "local" ? "rgb(194 65 12)" : undefined,
+            backgroundColor: (currentEnvironment || designer.environment) === "production" ? "rgb(220 252 231)" :
+                           (currentEnvironment || designer.environment) === "staging" ? "rgb(254 249 195)" :
+                           (currentEnvironment || designer.environment) === "development" ? "rgb(219 234 254)" :
+                           (currentEnvironment || designer.environment) === "local" ? "rgb(255 237 213)" : undefined,
+            color: (currentEnvironment || designer.environment) === "production" ? "rgb(21 128 61)" :
+                   (currentEnvironment || designer.environment) === "staging" ? "rgb(161 98 7)" :
+                   (currentEnvironment || designer.environment) === "development" ? "rgb(29 78 216)" :
+                   (currentEnvironment || designer.environment) === "local" ? "rgb(194 65 12)" : undefined,
           }}
         >
-          {designer.environment}
+          {currentEnvironment || designer.environment}
         </Badge>
 
         <div className="flex flex-wrap gap-1">
@@ -1947,7 +2541,12 @@ function DesignerCard({
         </div>
 
         <div className="flex gap-2">
-          <Button className="flex-1 gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] text-white" size="sm" onClick={() => onOpen(designer)}>
+          <Button
+            className="flex-1 gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            size="sm"
+            onClick={() => onOpen(designer)}
+            disabled={!currentUrl}
+          >
             <ExternalLink className="h-4 w-4" />
             Open Designer
           </Button>
@@ -1957,7 +2556,7 @@ function DesignerCard({
             asChild
           >
             <a
-              href={designer.url.replace(/\/$/, '') + '/web'}
+              href={(currentUrl || designer.url).replace(/\/$/, '') + '/web'}
               target="_blank"
               rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
@@ -1968,6 +2567,419 @@ function DesignerCard({
         </div>
       </div>
     </div>
+  )
+}
+
+function FolderAccordion({
+  folderPath,
+  folderTree,
+  viewMode,
+  editMode,
+  draggedFolder,
+  dragOverFolder,
+  dragOverGroup,
+  renamingFolder,
+  renamingFolderValue,
+  setRenamingFolderValue,
+  handleFolderDragStart,
+  handleFolderDragEnd,
+  handleFolderDragOver,
+  handleFolderDrop,
+  handleDragOver,
+  handleDrop,
+  startRenamingFolder,
+  saveRenamedFolder,
+  cancelRenamingFolder,
+  duplicateFolder,
+  openDesigner,
+  designers,
+  draggedDesigner,
+  dragOverDesigner,
+  handleDragStart,
+  handleDragEnd,
+  handleDesignerDragOver,
+  handleDesignerDragLeave,
+  handleDesignerDrop,
+  openEditDialog,
+  duplicateDesigner,
+  toggleFavorite,
+  deleteDesigner,
+  folderEnvironment,
+  setFolderEnvironment,
+  folderEnvironments,
+  folderOrder,
+  setFolderOrder,
+}: {
+  folderPath: string
+  folderTree: Record<string, { designers: Designer[], children: Set<string> }>
+  viewMode: "grid" | "list"
+  editMode: boolean
+  draggedFolder: string | null
+  dragOverFolder: string | null
+  dragOverGroup: string | null
+  renamingFolder: string | null
+  renamingFolderValue: string
+  setRenamingFolderValue: (value: string) => void
+  handleFolderDragStart: (folderName: string, e?: React.DragEvent) => void
+  handleFolderDragEnd: () => void
+  handleFolderDragOver: (e: React.DragEvent, folderName: string) => void
+  handleFolderDrop: (e: React.DragEvent, targetFolder: string) => void
+  handleDragOver: (e: React.DragEvent, groupName: string) => void
+  handleDrop: (e: React.DragEvent, targetGroup: string) => void
+  startRenamingFolder: (folderName: string) => void
+  saveRenamedFolder: () => Promise<void>
+  cancelRenamingFolder: () => void
+  duplicateFolder: (folderPath: string) => Promise<void>
+  openDesigner: (designer: Designer, folderPath?: string) => Promise<void>
+  designers: Designer[]
+  draggedDesigner: Designer | null
+  dragOverDesigner: string | null
+  handleDragStart: (designer: Designer) => void
+  handleDragEnd: () => void
+  handleDesignerDragOver: (e: React.DragEvent, designerId: string) => void
+  handleDesignerDragLeave: () => void
+  handleDesignerDrop: (e: React.DragEvent, designer: Designer, groupName: string) => void
+  openEditDialog: (designer: Designer) => void
+  duplicateDesigner: (designer: Designer) => void
+  toggleFavorite: (designerId: string) => void
+  deleteDesigner: (designerId: string) => void
+  folderEnvironment: "production" | "staging" | "development" | "local" | "all"
+  setFolderEnvironment: (folderPath: string, env: "production" | "staging" | "development" | "local" | "all") => void
+  folderEnvironments: Record<string, "production" | "staging" | "development" | "local" | "all">
+  folderOrder: Record<string, string[]>
+  setFolderOrder: React.Dispatch<React.SetStateAction<Record<string, string[]>>>
+}) {
+  const folder = folderTree[folderPath]
+  if (!folder) return null
+
+  const displayName = folderPath.split('/').pop() || folderPath
+
+  // Sort child folders using custom order if available
+  const childFoldersArray = Array.from(folder.children)
+  const customOrder = folderOrder?.[folderPath] ?? []
+  const childFolders = customOrder.length > 0
+    ? [...childFoldersArray].sort((a, b) => {
+        const aIndex = customOrder.indexOf(a)
+        const bIndex = customOrder.indexOf(b)
+        if (aIndex === -1 && bIndex === -1) return a.localeCompare(b)
+        if (aIndex === -1) return 1
+        if (bIndex === -1) return -1
+        return aIndex - bIndex
+      })
+    : childFoldersArray.sort()
+
+  console.log(`FolderAccordion ${folderPath}:`, {
+    childFoldersArray: childFoldersArray.slice(),
+    customOrder,
+    childFolders: childFolders.slice()
+  })
+
+  // Calculate total designers in this folder and all subfolders recursively
+  const getTotalDesigners = (path: string): number => {
+    const f = folderTree[path]
+    if (!f) return 0
+    let total = f.designers.length
+    Array.from(f.children).forEach((childPath) => {
+      total += getTotalDesigners(childPath)
+    })
+    return total
+  }
+
+  const totalDesigners = getTotalDesigners(folderPath)
+
+  return (
+    <AccordionItem
+      value={folderPath}
+      draggable={editMode}
+      onDragStart={(e) => handleFolderDragStart(folderPath, e)}
+      onDragEnd={handleFolderDragEnd}
+      className={cn(
+        "group rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 transition-all shadow-sm",
+        dragOverGroup === folderPath && !editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950",
+        dragOverFolder === folderPath && editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950 scale-105",
+        draggedFolder === folderPath && "opacity-50",
+        editMode && "cursor-move",
+      )}
+      onDragOver={(e) => {
+        if (editMode) {
+          handleFolderDragOver(e, folderPath)
+        } else {
+          handleDragOver(e, folderPath)
+        }
+      }}
+      onDrop={(e) => {
+        if (editMode) {
+          handleFolderDrop(e, folderPath)
+        } else {
+          handleDrop(e, folderPath)
+        }
+      }}
+    >
+      <div className="flex items-center justify-between w-full px-4 py-3 group">
+        <div className="flex items-center gap-2 flex-1">
+          <AccordionTrigger className="flex-1 hover:no-underline py-0 pr-4">
+            <div className="flex items-center gap-2 flex-1">
+              {editMode && <GripVertical className="h-5 w-5 text-muted-foreground" />}
+              <Folder className="h-5 w-5 text-muted-foreground" />
+              {renamingFolder === folderPath ? (
+                <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
+                  <Input
+                    value={renamingFolderValue}
+                    onChange={(e) => setRenamingFolderValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        saveRenamedFolder()
+                      } else if (e.key === "Escape") {
+                        cancelRenamingFolder()
+                      }
+                    }}
+                    className="h-8 text-lg font-semibold max-w-xs"
+                    autoFocus
+                  />
+                  <Button
+                    size="sm"
+                    onClick={saveRenamedFolder}
+                    className="h-8 bg-slate-600 hover:bg-slate-500"
+                  >
+                    <Check className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={cancelRenamingFolder}
+                    className="h-8"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <span className="text-lg font-semibold">{displayName}</span>
+                  <span className="text-sm font-normal text-muted-foreground">
+                    ({totalDesigners})
+                  </span>
+                </>
+              )}
+            </div>
+          </AccordionTrigger>
+          {!editMode && childFolders.length === 0 && folder.designers.length > 0 && (
+            <div className="flex gap-1 rounded-lg border border-gray-300 dark:border-neutral-500 bg-gray-100 dark:bg-neutral-800 p-1" onClick={(e) => e.stopPropagation()}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setFolderEnvironment(folderPath, "local")}
+                className={cn(
+                  "h-7 px-3 text-xs font-medium",
+                  folderEnvironment === "local" ? "bg-blue-500 text-white hover:bg-blue-600" : "hover:bg-gray-200 dark:hover:bg-neutral-700"
+                )}
+              >
+                Local
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setFolderEnvironment(folderPath, "development")}
+                className={cn(
+                  "h-7 px-3 text-xs font-medium",
+                  folderEnvironment === "development" ? "bg-blue-500 text-white hover:bg-blue-600" : "hover:bg-gray-200 dark:hover:bg-neutral-700"
+                )}
+              >
+                Development
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setFolderEnvironment(folderPath, "staging")}
+                className={cn(
+                  "h-7 px-3 text-xs font-medium",
+                  folderEnvironment === "staging" ? "bg-blue-500 text-white hover:bg-blue-600" : "hover:bg-gray-200 dark:hover:bg-neutral-700"
+                )}
+              >
+                Staging
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setFolderEnvironment(folderPath, "production")}
+                className={cn(
+                  "h-7 px-3 text-xs font-medium",
+                  folderEnvironment === "production" ? "bg-blue-500 text-white hover:bg-blue-600" : "hover:bg-gray-200 dark:hover:bg-neutral-700"
+                )}
+              >
+                Production
+              </Button>
+            </div>
+          )}
+          {editMode && renamingFolder !== folderPath && (
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  duplicateFolder(folderPath)
+                }}
+                className="h-7 px-2 flex-shrink-0 bg-slate-600 text-white hover:bg-slate-500 border-slate-600"
+              >
+                <Copy className="h-3.5 w-3.5 mr-1.5" />
+                Duplicate
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  startRenamingFolder(folderPath)
+                }}
+                className="h-7 px-2 flex-shrink-0 bg-slate-600 text-white hover:bg-slate-500 border-slate-600"
+              >
+                <Edit3 className="h-3.5 w-3.5 mr-1.5" />
+                Rename
+              </Button>
+            </div>
+          )}
+        </div>
+        {!editMode && folder.designers.length > 0 && childFolders.length === 0 && (
+          <div className="flex gap-2">
+            <Button
+              className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                folder.designers.forEach((designer, index) => {
+                  setTimeout(() => {
+                    openDesigner(designer, folderPath)
+                  }, index * 100)
+                })
+              }}
+            >
+              <Play className="h-4 w-4" />
+              Launch All
+            </Button>
+          </div>
+        )}
+      </div>
+      <AccordionContent className="px-4 pb-4">
+        {/* Render child folders first */}
+        {childFolders.length > 0 && (
+          <Accordion type="multiple" className="space-y-2 mb-4">
+            {childFolders.map((childPath) => (
+              <FolderAccordion
+                key={childPath}
+                folderPath={childPath}
+                folderTree={folderTree}
+                viewMode={viewMode}
+                editMode={editMode}
+                draggedFolder={draggedFolder}
+                dragOverFolder={dragOverFolder}
+                dragOverGroup={dragOverGroup}
+                renamingFolder={renamingFolder}
+                renamingFolderValue={renamingFolderValue}
+                setRenamingFolderValue={setRenamingFolderValue}
+                handleFolderDragStart={handleFolderDragStart}
+                handleFolderDragEnd={handleFolderDragEnd}
+                handleFolderDragOver={handleFolderDragOver}
+                handleFolderDrop={handleFolderDrop}
+                handleDragOver={handleDragOver}
+                handleDrop={handleDrop}
+                startRenamingFolder={startRenamingFolder}
+                saveRenamedFolder={saveRenamedFolder}
+                cancelRenamingFolder={cancelRenamingFolder}
+                duplicateFolder={duplicateFolder}
+                openDesigner={openDesigner}
+                designers={designers}
+                draggedDesigner={draggedDesigner}
+                dragOverDesigner={dragOverDesigner}
+                handleDragStart={handleDragStart}
+                handleDragEnd={handleDragEnd}
+                handleDesignerDragOver={handleDesignerDragOver}
+                handleDesignerDragLeave={handleDesignerDragLeave}
+                handleDesignerDrop={handleDesignerDrop}
+                openEditDialog={openEditDialog}
+                duplicateDesigner={duplicateDesigner}
+                toggleFavorite={toggleFavorite}
+                deleteDesigner={deleteDesigner}
+                folderEnvironment={folderEnvironments[childPath] || "all"}
+                setFolderEnvironment={setFolderEnvironment}
+                folderEnvironments={folderEnvironments}
+                folderOrder={folderOrder}
+                setFolderOrder={setFolderOrder}
+              />
+            ))}
+          </Accordion>
+        )}
+
+        {/* Render designers in this folder */}
+        {folder.designers.length > 0 && (
+          viewMode === "grid" ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {folder.designers.map((designer) => {
+                const hasSpecificEnvUrl = designer.urls && folderEnvironment !== "all" && designer.urls[folderEnvironment]
+                const currentUrl = hasSpecificEnvUrl
+                  ? designer.urls[folderEnvironment]
+                  : (folderEnvironment === "all" ? designer.url : undefined)
+                const currentEnv = folderEnvironment !== "all" ? folderEnvironment : designer.environment
+
+                return (
+                  <DesignerCard
+                    key={designer.id}
+                    designer={designer}
+                    groupName={folderPath}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={handleDesignerDragOver}
+                    onDragLeave={handleDesignerDragLeave}
+                    onDrop={handleDesignerDrop}
+                    isDragging={draggedDesigner?.id === designer.id}
+                    isDraggedOver={dragOverDesigner === designer.id}
+                    disabled={editMode}
+                    onOpen={(d) => openDesigner(d, folderPath)}
+                    onEdit={openEditDialog}
+                    onDuplicate={duplicateDesigner}
+                    onToggleFavorite={toggleFavorite}
+                    onDelete={deleteDesigner}
+                    currentUrl={currentUrl}
+                    currentEnvironment={currentEnv}
+                  />
+                )
+              })}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {folder.designers.map((designer) => {
+                const hasSpecificEnvUrl = designer.urls && folderEnvironment !== "all" && designer.urls[folderEnvironment]
+                const currentUrl = hasSpecificEnvUrl
+                  ? designer.urls[folderEnvironment]
+                  : (folderEnvironment === "all" ? designer.url : undefined)
+                const currentEnv = folderEnvironment !== "all" ? folderEnvironment : designer.environment
+
+                return (
+                  <DesignerListItem
+                    key={designer.id}
+                    designer={designer}
+                    groupName={folderPath}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={handleDesignerDragOver}
+                    onDragLeave={handleDesignerDragLeave}
+                    onDrop={handleDesignerDrop}
+                    isDragging={draggedDesigner?.id === designer.id}
+                    isDraggedOver={dragOverDesigner === designer.id}
+                    disabled={editMode}
+                    onOpen={(d) => openDesigner(d, folderPath)}
+                    onEdit={openEditDialog}
+                    onDuplicate={duplicateDesigner}
+                    onToggleFavorite={toggleFavorite}
+                    onDelete={deleteDesigner}
+                    currentUrl={currentUrl}
+                    currentEnvironment={currentEnv}
+                  />
+                )
+              })}
+            </div>
+          )
+        )}
+      </AccordionContent>
+    </AccordionItem>
   )
 }
 
@@ -1987,6 +2999,8 @@ function DesignerListItem({
   onDuplicate,
   onToggleFavorite,
   onDelete,
+  currentUrl,
+  currentEnvironment,
 }: {
   designer: Designer
   groupName: string
@@ -2003,6 +3017,8 @@ function DesignerListItem({
   onDuplicate: (designer: Designer) => void
   onToggleFavorite: (designerId: string) => void
   onDelete: (designerId: string) => void
+  currentUrl?: string
+  currentEnvironment?: string
 }) {
   return (
     <div
@@ -2029,24 +3045,26 @@ function DesignerListItem({
           <h3 className="font-semibold">{designer.name}</h3>
           {designer.isFavorite && <Star className="h-4 w-4 fill-yellow-500 text-yellow-500 flex-shrink-0" />}
         </div>
-        <p className="text-sm text-muted-foreground truncate">{designer.url}</p>
+        <p className="text-sm text-muted-foreground truncate">
+          {currentUrl || `No URL configured for ${currentEnvironment || designer.environment} environment`}
+        </p>
       </div>
 
       <Badge
         variant={undefined}
         className="capitalize border-transparent"
         style={{
-          backgroundColor: designer.environment === "production" ? "rgb(220 252 231)" :
-                         designer.environment === "staging" ? "rgb(254 249 195)" :
-                         designer.environment === "development" ? "rgb(219 234 254)" :
-                         designer.environment === "local" ? "rgb(255 237 213)" : undefined,
-          color: designer.environment === "production" ? "rgb(21 128 61)" :
-                 designer.environment === "staging" ? "rgb(161 98 7)" :
-                 designer.environment === "development" ? "rgb(29 78 216)" :
-                 designer.environment === "local" ? "rgb(194 65 12)" : undefined,
+          backgroundColor: (currentEnvironment || designer.environment) === "production" ? "rgb(220 252 231)" :
+                         (currentEnvironment || designer.environment) === "staging" ? "rgb(254 249 195)" :
+                         (currentEnvironment || designer.environment) === "development" ? "rgb(219 234 254)" :
+                         (currentEnvironment || designer.environment) === "local" ? "rgb(255 237 213)" : undefined,
+          color: (currentEnvironment || designer.environment) === "production" ? "rgb(21 128 61)" :
+                 (currentEnvironment || designer.environment) === "staging" ? "rgb(161 98 7)" :
+                 (currentEnvironment || designer.environment) === "development" ? "rgb(29 78 216)" :
+                 (currentEnvironment || designer.environment) === "local" ? "rgb(194 65 12)" : undefined,
         }}
       >
-        {designer.environment}
+        {currentEnvironment || designer.environment}
       </Badge>
 
       <div className="flex gap-1">
@@ -2063,7 +3081,12 @@ function DesignerListItem({
       </div>
 
       <div className="flex items-center gap-2">
-        <Button size="sm" className="gap-2 bg-[#2c5f8d] hover:bg-[#234a6d]" onClick={() => onOpen(designer)}>
+        <Button
+          size="sm"
+          className="gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={() => onOpen(designer)}
+          disabled={!currentUrl}
+        >
           <ExternalLink className="h-4 w-4" />
           Open
         </Button>
@@ -2073,7 +3096,7 @@ function DesignerListItem({
           asChild
         >
           <a
-            href={designer.url.replace(/\/$/, '') + '/web'}
+            href={(currentUrl || designer.url).replace(/\/$/, '') + '/web'}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
