@@ -73,6 +73,49 @@ Production builds create standalone desktop applications:
 - **Windows**: NSIS installer and portable EXE in `dist/`
 - **Linux**: AppImage and DEB package in `dist/`
 
+### Code Signing
+
+The application supports code signing for both macOS and Windows using local development certificates or production certificates.
+
+**Local Development Signing:**
+
+If you have self-signed certificates at `~/dev/tools/certs/code-signing/`, the build will automatically sign the application.
+
+1. **macOS**: Import certificate to keychain
+   ```bash
+   security import ~/dev/tools/certs/code-signing/developer-cert.crt -k ~/Library/Keychains/login.keychain-db
+   security import ~/dev/tools/certs/code-signing/developer-key.pem -k ~/Library/Keychains/login.keychain-db -T /usr/bin/codesign
+   ```
+
+2. **Windows**: Use the converted PFX certificate
+   ```bash
+   CSC_LINK=~/dev/tools/certs/code-signing/developer-cert.pfx CSC_KEY_PASSWORD="" npm run electron:build:win
+   ```
+
+3. **Disable signing** (for quick local builds):
+   ```bash
+   CSC_IDENTITY_AUTO_DISCOVERY=false npm run electron:build
+   ```
+
+**Production Signing:**
+
+For production builds with official certificates:
+
+- **macOS**: Set environment variables for notarization
+  ```bash
+  export APPLE_ID="your-apple-id@example.com"
+  export APPLE_APP_SPECIFIC_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+  export APPLE_TEAM_ID="XXXXXXXXXX"
+  npm run electron:build:mac
+  ```
+
+- **Windows**: Set certificate path and password
+  ```bash
+  export CSC_LINK="/path/to/certificate.pfx"
+  export CSC_KEY_PASSWORD="your-certificate-password"
+  npm run electron:build:win
+  ```
+
 ## Configuration
 
 ### Storage Locations

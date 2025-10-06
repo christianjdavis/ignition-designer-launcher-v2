@@ -1,0 +1,61 @@
+name: Build and Release Electron App
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  # Release signed Electron app on version tags
+  release-mac:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Build and Release macOS
+    uses: bw-design-group/workflows/.github/workflows/sign-electron-app.yaml@main
+    with:
+      node-version: "18"
+      platform: "mac"
+      runs-on: "macos-latest"
+    secrets:
+      SM_API_KEY: ${{ secrets.SM_API_KEY }}
+      SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+      SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+      SM_CODE_SIGNING_CERT_FILE_B64: ${{ secrets.SM_CODE_SIGNING_CERT_FILE_B64 }}
+      SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+      SM_HOST: ${{ secrets.SM_HOST }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      REPOSITORY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-windows:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Build and Release Windows
+    uses: bw-design-group/workflows/.github/workflows/sign-electron-app.yaml@main
+    with:
+      node-version: "18"
+      platform: "win"
+      runs-on: "windows-latest"
+    secrets:
+      SM_API_KEY: ${{ secrets.SM_API_KEY }}
+      SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+      SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+      SM_CODE_SIGNING_CERT_FILE_B64: ${{ secrets.SM_CODE_SIGNING_CERT_FILE_B64 }}
+      SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+      SM_HOST: ${{ secrets.SM_HOST }}
+      REPOSITORY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-linux:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Build and Release Linux
+    uses: bw-design-group/workflows/.github/workflows/sign-electron-app.yaml@main
+    with:
+      node-version: "18"
+      platform: "linux"
+      runs-on: "ubuntu-latest"
+    secrets:
+      SM_API_KEY: ${{ secrets.SM_API_KEY }}
+      SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+      SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+      SM_CODE_SIGNING_CERT_FILE_B64: ${{ secrets.SM_CODE_SIGNING_CERT_FILE_B64 }}
+      SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+      SM_HOST: ${{ secrets.SM_HOST }}
+      REPOSITORY_TOKEN: ${{ secrets.GITHUB_TOKEN }}

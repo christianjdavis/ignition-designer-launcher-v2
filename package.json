@@ -75,6 +75,7 @@
     "cross-env": "^10.1.0",
     "electron": "^38.2.0",
     "electron-builder": "^26.0.12",
+    "electron-notarize": "^1.2.2",
     "nextron": "^9.5.0",
     "postcss": "^8.5",
     "tailwindcss": "^4.1.9",
@@ -87,6 +88,7 @@
     "productName": "Designer Launcher v2",
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
+    "afterSign": "scripts/notarize.js",
     "files": [
       "electron/**/*",
       "out/**/*",
@@ -108,14 +110,19 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
     },
     "win": {
       "icon": "public/launcher.png",
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "signingHashAlgorithms": ["sha256"]
     },
     "linux": {
       "icon": "public/launcher.png",

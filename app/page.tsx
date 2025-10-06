@@ -27,6 +27,8 @@ import {
   Monitor,
   Download,
   Play,
+  Copy,
+  Globe,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -325,12 +327,9 @@ export default function IgnitionLauncher() {
   const [editMode, setEditMode] = useState(false)
   const [draggedFolder, setDraggedFolder] = useState<string | null>(null)
   const [dragOverFolder, setDragOverFolder] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    if (typeof window !== 'undefined') {
-      return (localStorage.getItem('designer-launcher-viewMode') as ViewMode) || "grid"
-    }
-    return "grid"
-  })
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
+  const [newFolderName, setNewFolderName] = useState("")
+  const [viewMode, setViewMode] = useState<ViewMode>("grid")
   const [filterTab, setFilterTab] = useState<FilterTab>("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -340,17 +339,7 @@ export default function IgnitionLauncher() {
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [customTags, setCustomTags] = useState<string[]>([])
   const [editTagsMode, setEditTagsMode] = useState(false)
-  const [openFolders, setOpenFolders] = useState<string[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('designer-launcher-openFolders')
-        return saved ? JSON.parse(saved) : []
-      } catch {
-        return []
-      }
-    }
-    return []
-  })
+  const [openFolders, setOpenFolders] = useState<string[]>([])
 
   // Generate Ignition designer deep link
   const generateDesignerLink = (designer: Designer): string => {
@@ -516,6 +505,25 @@ export default function IgnitionLauncher() {
     .filter((folder) => groupedDesigners[folder])
     .concat(Object.keys(groupedDesigners).filter((folder) => !folderOrder.includes(folder)))
 
+  // Load persisted state from localStorage on mount (client-side only)
+  useEffect(() => {
+    // Load viewMode
+    const savedViewMode = localStorage.getItem('designer-launcher-viewMode') as ViewMode
+    if (savedViewMode) {
+      setViewMode(savedViewMode)
+    }
+
+    // Load openFolders
+    try {
+      const savedFolders = localStorage.getItem('designer-launcher-openFolders')
+      if (savedFolders) {
+        setOpenFolders(JSON.parse(savedFolders))
+      }
+    } catch (error) {
+      console.error('Error loading openFolders from localStorage:', error)
+    }
+  }, [])
+
   // Initialize open folders on mount
   React.useEffect(() => {
     if (groupBy !== "none" && filterTab !== "recent") {
@@ -526,16 +534,12 @@ export default function IgnitionLauncher() {
 
   // Persist viewMode to localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('designer-launcher-viewMode', viewMode)
-    }
+    localStorage.setItem('designer-launcher-viewMode', viewMode)
   }, [viewMode])
 
   // Persist openFolders to localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('designer-launcher-openFolders', JSON.stringify(openFolders))
-    }
+    localStorage.setItem('designer-launcher-openFolders', JSON.stringify(openFolders))
   }, [openFolders])
 
   const toggleTag = (tag: string) => {
@@ -549,6 +553,17 @@ export default function IgnitionLauncher() {
   const openEditDialog = (designer: Designer) => {
     console.log('Opening edit dialog for:', designer.name)
     setEditingDesigner({ ...designer })
+    setEditDialogOpen(true)
+  }
+
+  const duplicateDesigner = (designer: Designer) => {
+    const duplicate: Designer = {
+      ...designer,
+      id: Date.now().toString(),
+      name: `${designer.name} (Copy)`,
+      order: designers.length + 1,
+    }
+    setEditingDesigner(duplicate)
     setEditDialogOpen(true)
   }
 
@@ -747,6 +762,62 @@ export default function IgnitionLauncher() {
     setFolderOrder(newOrder)
     setDraggedFolder(null)
     setDragOverFolder(null)
+  }
+
+  const startRenamingFolder = (folderName: string) => {
+    setRenamingFolder(folderName)
+    setNewFolderName(folderName)
+  }
+
+  const saveRenamedFolder = async () => {
+    if (!renamingFolder || !newFolderName.trim() || newFolderName === renamingFolder) {
+      setRenamingFolder(null)
+      setNewFolderName("")
+      return
+    }
+
+    // Update all designers in this folder
+    const updatedDesigners = designers.map((d) => {
+      const currentGroup = groupBy === "group" ? d.group || "Ungrouped" : d.environment
+      if (currentGroup === renamingFolder) {
+        if (groupBy === "group") {
+          return { ...d, group: newFolderName === "Ungrouped" ? undefined : newFolderName }
+        } else if (groupBy === "environment") {
+          return { ...d, environment: newFolderName as Designer["environment"] }
+        }
+      }
+      return d
+    })
+
+    setDesigners(updatedDesigners)
+
+    // Update folder order
+    const updatedFolderOrder = folderOrder.map((f) => (f === renamingFolder ? newFolderName : f))
+    setFolderOrder(updatedFolderOrder)
+
+    // Update open folders
+    const updatedOpenFolders = openFolders.map((f) => (f === renamingFolder ? newFolderName : f))
+    setOpenFolders(updatedOpenFolders)
+
+    // Save to file
+    try {
+      await storage.saveGateways(
+        updatedDesigners.map((d) => ({
+          ...d,
+          lastAccessed: d.lastAccessed.toISOString(),
+        }))
+      )
+    } catch (error) {
+      console.error('Failed to save renamed folder:', error)
+    }
+
+    setRenamingFolder(null)
+    setNewFolderName("")
+  }
+
+  const cancelRenamingFolder = () => {
+    setRenamingFolder(null)
+    setNewFolderName("")
   }
 
   return (
@@ -1286,7 +1357,7 @@ export default function IgnitionLauncher() {
                       onDragStart={() => handleFolderDragStart(groupName)}
                       onDragEnd={handleFolderDragEnd}
                       className={cn(
-                        "rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 transition-all shadow-sm",
+                        "group rounded border border-gray-200 dark:border-neutral-600 bg-white dark:bg-neutral-800 transition-all shadow-sm",
                         dragOverGroup === groupName && !editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950",
                         dragOverFolder === groupName && editMode && "border-blue-500 bg-blue-50 dark:bg-blue-950 scale-105",
                         draggedFolder === groupName && "opacity-50",
@@ -1308,30 +1379,100 @@ export default function IgnitionLauncher() {
                         }
                       }}
                     >
-                      <div className="flex items-center justify-between w-full px-4 py-3">
-                        <AccordionTrigger className="flex-1 hover:no-underline py-0 pr-4">
-                          <div className="flex items-center gap-2">
-                            {editMode && <GripVertical className="h-5 w-5 text-muted-foreground" />}
-                            <Folder className="h-5 w-5 text-muted-foreground" />
-                            <span className="text-lg font-semibold">{groupName}</span>
-                            <span className="text-sm font-normal text-muted-foreground">({designers.length})</span>
-                          </div>
-                        </AccordionTrigger>
+                      <div className="flex items-center justify-between w-full px-4 py-3 group">
+                        <div className="flex items-center gap-2 flex-1">
+                          <AccordionTrigger className="flex-1 hover:no-underline py-0 pr-4">
+                            <div className="flex items-center gap-2 flex-1">
+                              {editMode && <GripVertical className="h-5 w-5 text-muted-foreground" />}
+                              <Folder className="h-5 w-5 text-muted-foreground" />
+                              {renamingFolder === groupName ? (
+                                <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
+                                  <Input
+                                    value={newFolderName}
+                                    onChange={(e) => setNewFolderName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        saveRenamedFolder()
+                                      } else if (e.key === "Escape") {
+                                        cancelRenamingFolder()
+                                      }
+                                    }}
+                                    className="h-8 text-lg font-semibold max-w-xs"
+                                    autoFocus
+                                  />
+                                  <Button
+                                    size="sm"
+                                    onClick={saveRenamedFolder}
+                                    className="h-8 bg-slate-600 hover:bg-slate-500"
+                                  >
+                                    <Check className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={cancelRenamingFolder}
+                                    className="h-8"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <>
+                                  <span className="text-lg font-semibold">{groupName}</span>
+                                  <span className="text-sm font-normal text-muted-foreground">({designers.length})</span>
+                                </>
+                              )}
+                            </div>
+                          </AccordionTrigger>
+                          {editMode && renamingFolder !== groupName && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                startRenamingFolder(groupName)
+                              }}
+                              className="h-7 px-2 ml-2 flex-shrink-0 bg-slate-600 text-white hover:bg-slate-500 border-slate-600"
+                            >
+                              <Edit3 className="h-3.5 w-3.5 mr-1.5" />
+                              Rename
+                            </Button>
+                          )}
+                        </div>
                         {!editMode && designers.length > 0 && (
-                          <Button
-                            className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              designers.forEach((designer, index) => {
-                                setTimeout(() => {
-                                  openDesigner(designer)
-                                }, index * 100)
-                              })
-                            }}
-                          >
-                            <Play className="h-4 w-4" />
-                            Launch All
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
+                              onClick={async (e) => {
+                                e.stopPropagation()
+                                for (const designer of designers) {
+                                  const webUrl = designer.url.replace(/\/$/, '') + '/web'
+                                  if (window.electronAPI) {
+                                    await window.electronAPI.openExternal(webUrl)
+                                  } else {
+                                    window.open(webUrl, '_blank')
+                                  }
+                                }
+                              }}
+                            >
+                              <Globe className="h-4 w-4" />
+                              Open All Tabs
+                            </Button>
+                            <Button
+                              className="gap-2 h-9 border border-gray-300 dark:border-neutral-500 bg-slate-600 dark:bg-slate-600 hover:bg-slate-500 dark:hover:bg-slate-500 text-white cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                designers.forEach((designer, index) => {
+                                  setTimeout(() => {
+                                    openDesigner(designer)
+                                  }, index * 100)
+                                })
+                              }}
+                            >
+                              <Play className="h-4 w-4" />
+                              Launch All
+                            </Button>
+                          </div>
                         )}
                       </div>
                       <AccordionContent className="px-4 pb-4">
@@ -1352,6 +1493,7 @@ export default function IgnitionLauncher() {
                                 disabled={editMode}
                                 onOpen={openDesigner}
                                 onEdit={openEditDialog}
+                                onDuplicate={duplicateDesigner}
                                 onToggleFavorite={toggleFavorite}
                                 onDelete={deleteDesigner}
                               />
@@ -1374,6 +1516,7 @@ export default function IgnitionLauncher() {
                                 disabled={editMode}
                                 onOpen={openDesigner}
                                 onEdit={openEditDialog}
+                                onDuplicate={duplicateDesigner}
                                 onToggleFavorite={toggleFavorite}
                                 onDelete={deleteDesigner}
                               />
@@ -1403,6 +1546,7 @@ export default function IgnitionLauncher() {
                         isDraggedOver={dragOverDesigner === designer.id}
                         onOpen={openDesigner}
                         onEdit={openEditDialog}
+                        onDuplicate={duplicateDesigner}
                         onToggleFavorite={toggleFavorite}
                         onDelete={deleteDesigner}
                       />
@@ -1424,6 +1568,7 @@ export default function IgnitionLauncher() {
                         isDraggedOver={dragOverDesigner === designer.id}
                         onOpen={openDesigner}
                         onEdit={openEditDialog}
+                        onDuplicate={duplicateDesigner}
                         onToggleFavorite={toggleFavorite}
                         onDelete={deleteDesigner}
                       />
@@ -1448,68 +1593,72 @@ export default function IgnitionLauncher() {
 
       {/* Edit Designer Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl bg-white dark:bg-neutral-900">
           <DialogHeader>
-            <DialogTitle>Edit Designer</DialogTitle>
+            <DialogTitle className="text-gray-900 dark:text-white">Edit Designer</DialogTitle>
           </DialogHeader>
           {editingDesigner && (
             <div className="space-y-4">
-              <div>
-                <Label htmlFor="name">Name</Label>
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-gray-900 dark:text-white">Name</Label>
                 <Input
                   id="name"
                   value={editingDesigner.name}
                   onChange={(e) => setEditingDesigner({ ...editingDesigner, name: e.target.value })}
+                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white selection:bg-blue-600 selection:text-white"
                 />
               </div>
-              <div>
-                <Label htmlFor="url">Gateway URL</Label>
+              <div className="space-y-2">
+                <Label htmlFor="url" className="text-gray-900 dark:text-white">Gateway URL</Label>
                 <Input
                   id="url"
                   value={editingDesigner.url}
                   onChange={(e) => setEditingDesigner({ ...editingDesigner, url: e.target.value })}
                   placeholder="http://gateway.example.com"
+                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                 />
               </div>
-              <div>
-                <Label htmlFor="project">Project Name (optional)</Label>
+              <div className="space-y-2">
+                <Label htmlFor="project" className="text-gray-900 dark:text-white">Project Name (optional)</Label>
                 <Input
                   id="project"
                   value={editingDesigner.project || ""}
                   onChange={(e) => setEditingDesigner({ ...editingDesigner, project: e.target.value })}
                   placeholder="MyProject"
+                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                 />
               </div>
-              <div>
-                <Label htmlFor="environment">Environment</Label>
+              <div className="space-y-2">
+                <Label htmlFor="environment" className="text-gray-900 dark:text-white">Environment</Label>
                 <Select
                   value={editingDesigner.environment}
                   onValueChange={(value) =>
                     setEditingDesigner({ ...editingDesigner, environment: value as Designer["environment"] })
                   }
                 >
-                  <SelectTrigger id="environment">
+                  <SelectTrigger id="environment" className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="production">Production</SelectItem>
-                    <SelectItem value="staging">Staging</SelectItem>
-                    <SelectItem value="development">Development</SelectItem>
-                    <SelectItem value="local">Local</SelectItem>
+                  <SelectContent className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600">
+                    <SelectItem value="production" className="text-gray-900 dark:text-white">Production</SelectItem>
+                    <SelectItem value="staging" className="text-gray-900 dark:text-white">Staging</SelectItem>
+                    <SelectItem value="development" className="text-gray-900 dark:text-white">Development</SelectItem>
+                    <SelectItem value="local" className="text-gray-900 dark:text-white">Local</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label htmlFor="group">Group</Label>
+              <div className="space-y-2">
+                <Label htmlFor="group" className="text-gray-900 dark:text-white">Group</Label>
                 <Input
                   id="group"
                   value={editingDesigner.group || ""}
                   onChange={(e) => setEditingDesigner({ ...editingDesigner, group: e.target.value })}
                   placeholder="Group 1"
+                  className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                 />
               </div>
-              <div>
-                <Label htmlFor="tags">Tags</Label>
+              <div className="space-y-2">
+                <Label htmlFor="tags" className="text-gray-900 dark:text-white">Tags</Label>
                 <div className="space-y-2">
                   <div className="flex flex-wrap gap-2">
                     {allTags.map((tag) => (
@@ -1533,8 +1682,8 @@ export default function IgnitionLauncher() {
                         className={cn(
                           "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
                           editingDesigner.tags.includes(tag)
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+                            ? "bg-blue-600 text-white hover:bg-blue-700"
+                            : "bg-gray-300 dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-400 dark:hover:bg-gray-600",
                         )}
                       >
                         {tag}
@@ -1545,6 +1694,7 @@ export default function IgnitionLauncher() {
                     <Input
                       id="new-tag"
                       placeholder="Add new tag..."
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white placeholder:text-gray-500 dark:placeholder:text-gray-400"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
@@ -1564,7 +1714,8 @@ export default function IgnitionLauncher() {
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={(e) => {
+                      className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-neutral-700"
+                      onClick={() => {
                         const input = document.getElementById("new-tag") as HTMLInputElement
                         const newTag = input.value.trim()
                         if (newTag && !editingDesigner.tags.includes(newTag)) {
@@ -1584,11 +1735,11 @@ export default function IgnitionLauncher() {
               </div>
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)} className="bg-white dark:bg-neutral-800 border-gray-300 dark:border-neutral-600 text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-neutral-700">
               Cancel
             </Button>
-            <Button onClick={saveDesigner}>Save Changes</Button>
+            <Button onClick={saveDesigner} className="bg-slate-600 hover:bg-slate-500 text-white">Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1609,6 +1760,7 @@ function DesignerCard({
   disabled = false,
   onOpen,
   onEdit,
+  onDuplicate,
   onToggleFavorite,
   onDelete,
 }: {
@@ -1624,6 +1776,7 @@ function DesignerCard({
   disabled?: boolean
   onOpen: (designer: Designer) => void
   onEdit: (designer: Designer) => void
+  onDuplicate: (designer: Designer) => void
   onToggleFavorite: (designerId: string) => void
   onDelete: (designerId: string) => void
 }) {
@@ -1678,6 +1831,15 @@ function DesignerCard({
             >
               <Settings className="mr-2 h-4 w-4" />
               Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onDuplicate(designer)
+              }}
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Duplicate
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
@@ -1784,10 +1946,26 @@ function DesignerCard({
           )}
         </div>
 
-        <Button className="w-full gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] text-white" size="sm" onClick={() => onOpen(designer)}>
-          <ExternalLink className="h-4 w-4" />
-          Open Designer
-        </Button>
+        <div className="flex gap-2">
+          <Button className="flex-1 gap-2 bg-[#2c5f8d] hover:bg-[#234a6d] text-white" size="sm" onClick={() => onOpen(designer)}>
+            <ExternalLink className="h-4 w-4" />
+            Open Designer
+          </Button>
+          <Button
+            className="gap-2 bg-slate-600 hover:bg-slate-500 text-white"
+            size="sm"
+            asChild
+          >
+            <a
+              href={designer.url.replace(/\/$/, '') + '/web'}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Globe className="h-4 w-4" />
+            </a>
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -1806,6 +1984,7 @@ function DesignerListItem({
   disabled = false,
   onOpen,
   onEdit,
+  onDuplicate,
   onToggleFavorite,
   onDelete,
 }: {
@@ -1821,6 +2000,7 @@ function DesignerListItem({
   disabled?: boolean
   onOpen: (designer: Designer) => void
   onEdit: (designer: Designer) => void
+  onDuplicate: (designer: Designer) => void
   onToggleFavorite: (designerId: string) => void
   onDelete: (designerId: string) => void
 }) {
@@ -1887,6 +2067,20 @@ function DesignerListItem({
           <ExternalLink className="h-4 w-4" />
           Open
         </Button>
+        <Button
+          size="sm"
+          className="gap-2 bg-slate-600 hover:bg-slate-500"
+          asChild
+        >
+          <a
+            href={designer.url.replace(/\/$/, '') + '/web'}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Globe className="h-4 w-4" />
+          </a>
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -1911,6 +2105,15 @@ function DesignerListItem({
             >
               <Settings className="mr-2 h-4 w-4" />
               Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.stopPropagation()
+                onDuplicate(designer)
+              }}
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Duplicate
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={(e) => {
