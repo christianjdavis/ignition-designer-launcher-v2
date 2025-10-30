@@ -9,6 +9,7 @@ declare global {
       saveTags: (tags: string[]) => Promise<{ success: boolean }>
       getFolders: () => Promise<string[]>
       saveFolders: (folders: string[]) => Promise<{ success: boolean }>
+      openExternal: (url: string) => Promise<void>
       isElectron: boolean
     }
   }
@@ -92,5 +93,14 @@ export async function saveFolders(folders: string[]) {
       body: JSON.stringify(folders),
     })
     return await response.json()
+  }
+}
+
+export async function openExternal(url: string) {
+  if (isElectron() && window.electronAPI) {
+    return await window.electronAPI.openExternal(url)
+  } else {
+    // In browser, open in new tab
+    window.open(url, '_blank')
   }
 }

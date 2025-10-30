@@ -88,7 +88,6 @@
     "productName": "Designer Launcher v2",
     "npmRebuild": false,
     "buildDependenciesFromSource": false,
-    "afterSign": "scripts/notarize.js",
     "files": [
       "electron/**/*",
       "out/**/*",
@@ -121,8 +120,7 @@
       "target": [
         "nsis",
         "portable"
-      ],
-      "signingHashAlgorithms": ["sha256"]
+      ]
     },
     "linux": {
       "icon": "public/launcher.png",

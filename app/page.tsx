@@ -444,6 +444,8 @@ export default function IgnitionLauncher() {
     // Open designer with folder path for environment-aware URL
     const deepLink = generateDesignerLink(designer, folderPath)
     console.log('Opening deep link:', deepLink)
+
+    // Use window.location.href for designer:// deep links
     window.location.href = deepLink
   }
 
@@ -934,6 +936,14 @@ export default function IgnitionLauncher() {
       return
     }
 
+    // Prevent dropping a folder onto itself or onto its own children
+    if (draggedFolder === targetFolder || targetFolder.startsWith(draggedFolder + '/')) {
+      console.log('Cannot drop folder onto itself or its children')
+      setDraggedFolder(null)
+      setDragOverFolder(null)
+      return
+    }
+
     // Determine parent folder from dragged and target folder paths
     const getDraggedParent = (path: string) => {
       const parts = path.split('/')
@@ -944,9 +954,55 @@ export default function IgnitionLauncher() {
     const draggedParent = getDraggedParent(draggedFolder)
     const targetParent = getDraggedParent(targetFolder)
 
-    // Only allow reordering within same parent
-    if (draggedParent !== targetParent) return
+    // Check if we're moving to a different parent or reordering within the same parent
+    if (draggedParent !== targetParent) {
+      // MOVING TO A DIFFERENT PARENT
+      console.log('Moving folder to different parent:', draggedFolder, '->', targetFolder)
 
+      // Get the folder name (last part of the path)
+      const folderName = draggedFolder.split('/').pop()
+      if (!folderName) return
+
+      // Create the new folder path (targetFolder becomes the new parent)
+      const newFolderPath = targetFolder + '/' + folderName
+
+      console.log('New folder path:', newFolderPath)
+
+      // Update all folders: rename the dragged folder and all its children
+      setFolders(prev => {
+        const updated = prev.map(f => {
+          // If this is the dragged folder, rename it
+          if (f === draggedFolder) {
+            return newFolderPath
+          }
+          // If this is a child of the dragged folder, update its path
+          if (f.startsWith(draggedFolder + '/')) {
+            return newFolderPath + f.substring(draggedFolder.length)
+          }
+          return f
+        })
+        return updated
+      })
+
+      // Update all designers in the moved folder and its subfolders
+      setDesigners(prev => prev.map(d => {
+        // If designer is in the dragged folder
+        if (d.folderPath === draggedFolder) {
+          return { ...d, folderPath: newFolderPath }
+        }
+        // If designer is in a subfolder of the dragged folder
+        if (d.folderPath?.startsWith(draggedFolder + '/')) {
+          return { ...d, folderPath: newFolderPath + d.folderPath.substring(draggedFolder.length) }
+        }
+        return d
+      }))
+
+      setDraggedFolder(null)
+      setDragOverFolder(null)
+      return
+    }
+
+    // REORDERING WITHIN THE SAME PARENT (existing behavior)
     // Get all sibling folders with current sort order applied
     const getSortedSiblings = (parentPath: string) => {
       if (parentPath === '') {
@@ -2553,16 +2609,13 @@ function DesignerCard({
           <Button
             className="gap-2 bg-slate-600 hover:bg-slate-500 text-white"
             size="sm"
-            asChild
+            onClick={(e) => {
+              e.stopPropagation()
+              const webUrl = (currentUrl || designer.url).replace(/\/$/, '') + '/web'
+              storage.openExternal(webUrl)
+            }}
           >
-            <a
-              href={(currentUrl || designer.url).replace(/\/$/, '') + '/web'}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <Globe className="h-4 w-4" />
-            </a>
+            <Globe className="h-4 w-4" />
           </Button>
         </div>
       </div>
@@ -3093,16 +3146,13 @@ function DesignerListItem({
         <Button
           size="sm"
           className="gap-2 bg-slate-600 hover:bg-slate-500"
-          asChild
+          onClick={(e) => {
+            e.stopPropagation()
+            const webUrl = (currentUrl || designer.url).replace(/\/$/, '') + '/web'
+            storage.openExternal(webUrl)
+          }}
         >
-          <a
-            href={(currentUrl || designer.url).replace(/\/$/, '') + '/web'}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Globe className="h-4 w-4" />
-          </a>
+          <Globe className="h-4 w-4" />
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
